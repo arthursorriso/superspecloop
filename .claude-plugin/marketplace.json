@@ -1,0 +1,16 @@
+{
+  "name": "superspecloop",
+  "description": "SuperSpecLoop: a spec-driven review-and-implement pipeline for Claude Code on top of GitHub Spec Kit",
+  "owner": {
+    "name": "Arthur",
+    "url": "https://github.com/arthursorriso"
+  },
+  "plugins": [
+    {
+      "name": "superspecloop",
+      "description": "Spec-driven agentic pipeline for Claude Code, on top of GitHub Spec Kit.",
+      "version": "0.1.0",
+      "source": "./"
+    }
+  ]
+}

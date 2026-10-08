@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Summarize what a pipeline run did and how long each part took, from the
+# files it left behind, so a run can be judged on numbers instead of on
+# memory. The workspace is deleted after a local merge; this file is the
+# part worth keeping.
+#
+# Safe to share by construction: the output holds counts, PASS/FAIL, times
+# and the pipeline's own file names — never the feature's name, a branch, a
+# commit, a test name or any text a reviewer or the controller wrote. Ledger
+# lines are matched against fixed templates and only their numbers are
+# kept; a line that does not match a template is counted, never printed.
+# Keep it that way: anything added here must be a number or a fixed word.
+#
+# Reads the feature's workspace (ledger, reviews, reports) and git history.
+# Writes: <workspace>/metrics.md, overwritten on each run
+#
+# Token usage is not in any file the pipeline writes: paste the Session
+# block of Claude Code's /usage at the end of metrics.md by hand.
+#
+# Usage: run-metrics FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: run-metrics FEATURE_DIR" >&2
+  exit 2
+fi
+
+feature=${1%/}
+scripts="$(cd "$(dirname "$0")" && pwd)/../../execution-loop/scripts"
+dir=$("${BASH:-bash}" "$scripts/pipeline-workspace" "$feature")
+ledger="$dir/progress.md"
+out="$dir/metrics.md"
+[ -f "$ledger" ] || { echo "missing $ledger" >&2; exit 2; }
+
+count_lines() { grep -cE "$1" "$ledger" || true; }
+count_files() { ls "$dir" 2>/dev/null | grep -cE "$1" || true; }
+
+start=$(sed -n 's/^Start: \([0-9a-f]\{7,\}\).*/\1/p' "$ledger" | head -1)
+"${BASH:-bash}" "$scripts/rulings" "$feature" >/dev/null
+
+{
+  echo "# Run metrics"
+  echo
+  echo "Generated $(date '+%Y-%m-%d %H:%M'). Counts, results and times only:"
+  echo "no names, no text from the run. Safe to share as it is."
+  echo
+
+  echo "## Counts"
+  echo
+  echo "| What | Count |"
+  echo "|---|---|"
+  echo "| Spec reviews | $(count_files '^spec-review-[0-9]+\.md$') |"
+  echo "| Spec edits | $(count_files '^spec-edit-[0-9]+\.md$') |"
+  echo "| Gate 1 answer rounds | $(count_files '^spec-answers-[0-9]+\.md$') |"
+  echo "| Plan reviews | $(count_files '^plan-review-[0-9]+\.md$') |"
+  echo "| Plan edits | $(count_files '^plan-edit-[0-9]+\.md$') |"
+  echo "| Units | $(count_lines '^Unit [0-9]+: complete') |"
+  echo "| Unit reviews (first pass) | $(count_files '^unit-[0-9]+-review\.md$') |"
+  echo "| Unit re-reviews (fix rounds) | $(count_files '^unit-[0-9]+-review-round-[0-9]+\.md$') |"
+  echo "| Units that needed a fix round | $(grep -oE '^Unit [0-9]+: fix round' "$ledger" | sort -u | wc -l | tr -d ' ') |"
+  echo "| Deferred minors | $(count_lines ': minor \(deferred\)') |"
+  echo "| Parked findings | $(count_lines ': parked ') |"
+  echo "| Flakes logged | $(count_lines ': flake ') |"
+  echo "| Rulings | $(grep -c '^- ' "$dir/rulings.md" || true) |"
+  echo "| Whole-branch reviews | $(count_files '^final-review(-round-[0-9]+)?\.md$') |"
+  echo
+  echo "Every review, edit and report file above is one subagent dispatch, plus"
+  echo "one implementer per unit and one for the final fix wave, if any."
+  echo
+
+  echo "## Outcomes"
+  echo
+  # Fixed templates only; numbers kept, everything else dropped.
+  perl -ne '
+    chomp; my $o;
+    if    (/^Spec review: round (\d+)\/3( after answers)? \((\d+) blocking → (\d+) applied, (\d+) not applied; (\d+) question\(s\) open\)$/)
+          { $o = "Spec review round $1" . ($2 ? " after answers" : "") . ": $3 blocking, $4 applied, $5 not applied, $6 question(s) open" }
+    elsif (/^Gate 1: waiting — (\d+) question\(s\)$/)        { $o = "Gate 1: waiting, $1 question(s)" }
+    elsif (/^Gate 1: (\d+) answer\(s\) applied$/)             { $o = "Gate 1: $1 answer(s) applied" }
+    elsif (/^Gate 1: approved$/)                               { $o = "Gate 1: approved" }
+    elsif (/^Plan review: round (\d+)\/3 \((\d+) blocking → (\d+) applied, (\d+) not applied; (\d+) ruling\(s\)\)$/)
+          { $o = "Plan review round $1: $2 blocking, $3 applied, $4 not applied, $5 ruling(s)" }
+    elsif (/^Plan review: complete \((\d+) round\(s\), (\d+) ruling\(s\), (\d+) parked\)$/)
+          { $o = "Plan review complete: $1 round(s), $2 ruling(s), $3 parked" }
+    elsif (/^Analyze: (\d+) critical, (\d+) high, (\d+) medium, (\d+) low(, 1 remediation round)?$/)
+          { $o = "Analyze: $1 critical, $2 high, $3 medium, $4 low" . ($5 ? ", 1 remediation round" : "") }
+    elsif (/^Baseline: /)
+          { my @g = /\b(suite|typecheck|lint) (PASS|FAIL)\b/g;
+            if (@g) { my @p; while (@g) { my ($k, $v) = splice(@g, 0, 2); push @p, "$k $v" } $o = "Baseline: " . join(", ", @p) } }
+    elsif (/^Unit (\d+): fix round (\d+)\/5 \((\d+) addressed, (\d+) open\b/)
+          { $o = "Unit $1 fix round $2: $3 addressed, $4 open" }
+    elsif (/^Unit (\d+): complete \(.*?(review clean|(\d+) parked)\)$/)
+          { $o = "Unit $1 complete: " . ($3 ne "" ? "$3 parked" : "review clean") }
+    elsif (/^Final review: (Yes|With fixes|No) \((\d+) critical, (\d+) important, (\d+) to fix before merge, (\d+) can wait\)$/)
+          { $o = "Final review: $1 ($2 critical, $3 important, $4 to fix before merge, $5 can wait)" }
+    elsif (/^Final fix: \((\d+) addressed, (\d+) open\b/)       { $o = "Final fix: $1 addressed, $2 open" }
+    elsif (/^Finish: (PR|merged|kept)\b/)                       { $o = "Finish: $1" }
+    elsif (/^(Spec review|Gate 1|Plan review|Analyze|Final review|Final fix):/) { $skipped++ }
+    print "- $o\n" if defined $o;
+    END { print "\n$skipped outcome line(s) did not match a template and were left out.\n" if $skipped }
+  ' "$ledger"
+  echo
+
+  echo "## Code"
+  echo
+  if [ -n "$start" ] && git rev-parse --verify --quiet "$start" >/dev/null; then
+    root=$(git rev-parse --show-toplevel)
+    feature_abs=$(CDPATH= cd -- "$feature" && pwd -P)
+    feature_rel=${feature_abs#"$root"/}
+    stat=$(git -C "$root" diff --shortstat "${start}..HEAD" -- . ":(exclude)${feature_rel}" ":(exclude).specify" | sed 's/^ *//')
+    echo "- Commits: $(git rev-list --count "${start}..HEAD")"
+    echo "- Outside the feature's documents: ${stat:-no changes}"
+    echo "- First commit: $(git log --reverse --format='%ad' --date=format:'%Y-%m-%d %H:%M' "${start}..HEAD" | head -1)"
+    echo "- Last commit: $(git log -1 --format='%ad' --date=format:'%Y-%m-%d %H:%M')"
+  else
+    echo "- No usable \`Start:\` line in the ledger."
+  fi
+  echo
+
+  echo "## Timeline"
+  echo
+  echo "Each file the run wrote, by last modification. A long gap means a"
+  echo "subagent working, a stop waiting for the human, or nothing at all —"
+  echo "the file names on either side of it tell which."
+  echo
+  echo "| Time | Since previous | File |"
+  echo "|---|---|---|"
+  ( cd "$dir" && ls ) | grep -vE '^(metrics\.md|rulings\.md|progress\.md|feature-path)$' \
+    | ( cd "$dir" && perl -ne '
+        chomp; my @s = stat($_) or next; printf "%d\t%s\n", $s[9], $_;
+      ' ) \
+    | sort -n | perl -MPOSIX -ne '
+        my ($t, $f) = split /\t/; chomp $f;
+        $f = "review package" if $f =~ /^review-.*\.diff$/;
+        next unless $f eq "review package" || $f =~ /^[a-z0-9-]+\.(md|txt)$/;
+        my $gap = defined $prev ? sprintf("%d min", ($t - $prev) / 60) : "";
+        printf "| %s | %s | %s |\n", strftime("%m-%d %H:%M", localtime $t), $gap, $f;
+        $first = $t unless defined $first; $prev = $t;
+        END { printf "\nFirst to last file: %d min.\n", ($prev - $first) / 60 if defined $first }
+      '
+  echo
+
+  echo "## Tokens"
+  echo
+  echo "_Paste the Session block of \`/usage\` here, from the session that ran the build._"
+} > "$out"
+
+echo "wrote ${out}"

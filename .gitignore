@@ -1,0 +1,4 @@
+# Rascunho de execução do pipeline (ledger, briefs, relatórios, pacotes de revisão)
+.pipeline/
+
+.DS_Store

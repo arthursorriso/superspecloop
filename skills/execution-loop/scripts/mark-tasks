@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Mark Spec Kit tasks as done in the feature's tasks.md (`- [ ] T012` ->
+# `- [X] T012`), the same convention /speckit.implement uses. Only the
+# checkbox of the named IDs changes; every other byte of the file is kept.
+# Fails (exit 3) if any ID is missing, so a typo never passes silently.
+#
+# Usage: mark-tasks FEATURE_DIR T001 [T002 ...]
+set -euo pipefail
+
+if [ $# -lt 2 ]; then
+  echo "usage: mark-tasks FEATURE_DIR TASK_ID [TASK_ID ...]" >&2
+  exit 2
+fi
+
+feature=${1%/}
+shift
+tasks="$feature/tasks.md"
+[ -f "$tasks" ] || { echo "no tasks.md in $feature" >&2; exit 2; }
+
+# Plain string, not an array: macOS ships bash 3.2, where an empty array
+# under `set -u` is an unbound-variable error.
+missing=""
+for id in "$@"; do
+  grep -Eq "^[[:space:]]*- \[[ xX]\][[:space:]]+${id}([^0-9]|$)" "$tasks" || missing="$missing $id"
+done
+if [ -n "$missing" ]; then
+  echo "task id(s) not found in $tasks:$missing" >&2
+  exit 3
+fi
+
+tmp=$(mktemp)
+awk -v ids="$*" '
+  BEGIN { n = split(ids, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+  {
+    if (match($0, /^[ \t]*- \[ \][ \t]+T[0-9]+/)) {
+      id = substr($0, RSTART, RLENGTH); sub(/.*[ \t]/, "", id)
+      if (id in want) sub(/- \[ \]/, "- [X]")
+    }
+    print
+  }
+' "$tasks" > "$tmp"
+cat "$tmp" > "$tasks"
+rm -f "$tmp"
+
+echo "marked done in ${tasks}: $*"

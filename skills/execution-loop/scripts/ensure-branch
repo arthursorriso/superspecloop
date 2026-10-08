@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Make sure a feature's commits do not land on the repository's default
+# branch. Recent Spec Kit versions no longer create a feature branch on their
+# own, so a pipeline that commits "wherever it is" would commit to main.
+#
+#   - On the default branch (origin's HEAD, else main or master): create and
+#     switch to a branch named after the feature directory. Uncommitted
+#     files, including the feature's documents, come along.
+#   - On any other branch: stay, and say whether its name matches the
+#     feature, so the human can be told where the commits will land.
+#   - Detached HEAD: refuse (exit 3); the human decides where the work goes.
+#
+# Prints one line describing what it did. Never commits, never pushes.
+#
+# Usage: ensure-branch FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: ensure-branch FEATURE_DIR" >&2
+  exit 2
+fi
+
+feature=${1%/}
+[ -d "$feature" ] || { echo "no such feature directory: $feature" >&2; exit 2; }
+name=$(basename "$feature")
+
+current=$(git branch --show-current)
+if [ -z "$current" ]; then
+  echo "detached HEAD: no branch to commit to — ask the human where this feature's work should go" >&2
+  exit 3
+fi
+
+default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)
+
+on_default=0
+if [ -n "$default" ]; then
+  [ "$current" = "$default" ] && on_default=1
+else
+  case "$current" in main|master) on_default=1 ;; esac
+fi
+
+if [ "$on_default" -eq 1 ]; then
+  if git show-ref --verify --quiet "refs/heads/$name"; then
+    git checkout --quiet "$name"
+    echo "branch: switched from $current to existing feature branch $name"
+  else
+    git checkout --quiet -b "$name"
+    echo "branch: created $name from $current and switched to it"
+  fi
+elif [ "$current" = "$name" ]; then
+  echo "branch: on $current"
+else
+  echo "branch: on $current, which is not named after the feature ($name) — commits will land on $current"
+fi

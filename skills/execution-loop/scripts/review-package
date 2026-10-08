@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Generate a review package: commit list, stat summary, and the net diff with
+# extended context, written to a file the reviewer reads in one call. Using
+# the recorded per-unit BASE (not HEAD~1) keeps multi-commit units intact.
+#
+# Unlike upstream, each diff line carries its line number in the new file:
+# reviewers reading a plain diff cited the package's own line numbers.
+#
+# The feature's own documents (spec, plan, tasks), .specify/ and dependency
+# lockfiles are left out of the diff body: reviewers read the spec directly,
+# and on a whole-branch range those files would bury the code. They still
+# show in the stat.
+#
+# Derived from Superpowers' review-package (MIT, (c) 2025 Jesse Vincent).
+# See UPSTREAM.md.
+#
+# Usage: review-package FEATURE_DIR BASE HEAD [OUTFILE]
+# Default OUTFILE: <workspace>/review-<base7>..<head7>.diff
+set -euo pipefail
+
+if [ $# -lt 3 ] || [ $# -gt 4 ]; then
+  echo "usage: review-package FEATURE_DIR BASE HEAD [OUTFILE]" >&2
+  exit 2
+fi
+
+feature=$1
+base=$2
+head=$3
+
+git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
+git rev-parse --verify --quiet "$head" >/dev/null || { echo "bad HEAD: $head" >&2; exit 2; }
+
+# Range guards (exit 3): a wrong-branch HEAD yields a range that is empty or
+# not rooted at BASE; either would silently produce a bogus review package.
+git merge-base --is-ancestor "$base" "$head" || { echo "HEAD is not a descendant of BASE: ${base}..${head}" >&2; exit 3; }
+[ "$(git rev-list --count "${base}..${head}")" -gt 0 ] || { echo "empty commit range: ${base}..${head}" >&2; exit 3; }
+
+if [ $# -eq 4 ]; then
+  out=$4
+else
+  dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/pipeline-workspace" "$feature")
+  out="$dir/review-$(git rev-parse --short "$base")..$(git rev-parse --short "$head").diff"
+fi
+
+root=$(git rev-parse --show-toplevel)
+feature_abs=$(CDPATH= cd -- "$feature" && pwd -P)
+feature_rel=${feature_abs#"$root"/}
+
+{
+  echo "# Review package: ${base}..${head}"
+  echo
+  echo "## Commits"
+  git log --oneline "${base}..${head}"
+  echo
+  echo "## Files changed"
+  git diff --stat "${base}..${head}"
+  echo
+  echo "## Diff"
+  echo "# The left column is the line number in the NEW version of the file."
+  echo "# Cite findings as path:that-number, never as a line of this package."
+  echo "# Not shown here (read them directly): ${feature_rel}/, .specify/ and dependency lockfiles"
+  git -C "$root" diff -U10 "${base}..${head}" -- . \
+    ":(exclude)${feature_rel}" ":(exclude).specify" \
+    ":(exclude,glob)**/package-lock.json" ":(exclude,glob)**/yarn.lock" \
+    ":(exclude,glob)**/pnpm-lock.yaml" ":(exclude,glob)**/bun.lock" \
+    ":(exclude,glob)**/Cargo.lock" ":(exclude,glob)**/poetry.lock" \
+    ":(exclude,glob)**/uv.lock" ":(exclude,glob)**/Gemfile.lock" \
+    ":(exclude,glob)**/composer.lock" ":(exclude,glob)**/go.sum" | awk '
+    /^diff --git/ { inhunk = 0; print; next }
+    /^@@/ { match($0, /\+[0-9]+/); n = substr($0, RSTART + 1, RLENGTH - 1) + 0; inhunk = 1; print; next }
+    inhunk && /^[+ ]/ { printf "%5d %s\n", n, $0; n++; next }
+    inhunk && /^-/ { printf "%5s %s\n", "", $0; next }
+    { print }
+  '
+} > "$out"
+
+commits=$(git rev-list --count "${base}..${head}")
+echo "wrote ${out}: ${commits} commit(s), $(wc -c < "$out" | tr -d ' ') bytes"
+
+# Refresh the rulings file that travels with every dispatch, so it is never
+# staler than the package it goes out with. No ledger yet (a preview run by
+# hand) means no rulings: stay quiet.
+"${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/rulings" "$feature" 2>/dev/null || true

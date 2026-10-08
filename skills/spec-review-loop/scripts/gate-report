@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Assemble the Gate 1 document the human reads before approving a spec, from
+# the files the spec review loop already wrote. The controller composes
+# nothing: the questions, the traceability table and the list of what was
+# removed are copied from their sources, so none of them can be summarized
+# away.
+#
+# Reads from the feature's workspace:
+#   spec-review-<k>.md   the latest one (highest k): Questions, Traceability,
+#                        Blocking (anything still open), Suggestions
+#   spec-edit-*.md       every edit report's "## Removed" section
+#   progress.md          "Spec review:" lines, as the review trail
+# Writes: <FEATURE_DIR>/gate-1.md
+#
+# Usage: gate-report FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: gate-report FEATURE_DIR" >&2
+  exit 2
+fi
+
+feature=${1%/}
+here=$(cd "$(dirname "$0")" && pwd)
+loop="$here/../../execution-loop/scripts"
+dir=$("${BASH:-bash}" "$loop/pipeline-workspace" "$feature")
+ledger="$dir/progress.md"
+out="$feature/gate-1.md"
+
+section() { "${BASH:-bash}" "$loop/md-section" "$1" "$2"; }
+# True when a section has content other than a bare "None."
+has_content() { [ -n "$1" ] && ! printf '%s\n' "$1" | grep -Eqx '[[:space:]]*None\.?[[:space:]]*'; }
+
+latest=""
+k=1
+while [ -f "$dir/spec-review-$k.md" ]; do latest="$dir/spec-review-$k.md"; k=$((k + 1)); done
+[ -n "$latest" ] || { echo "no spec review found in $dir (expected spec-review-1.md)" >&2; exit 2; }
+
+name=$(sed -n 's/^# Feature Specification:[[:space:]]*//p' "$feature/spec.md" | head -1)
+[ -n "$name" ] || name=$(basename "$feature")
+
+questions=$(section "$latest" "## Questions for the Human")
+blocking=$(section "$latest" "## Blocking")
+trace=$(section "$latest" "## Traceability")
+suggestions=$(section "$latest" "## Suggestions")
+nq=$(printf '%s\n' "$questions" | grep -c '^### ' || true)
+
+removed=""
+for f in "$dir"/spec-edit-*.md; do
+  [ -f "$f" ] || continue
+  r=$(section "$f" "## Removed")
+  if has_content "$r"; then removed="${removed}${removed:+
+}${r}"; fi
+done
+
+{
+  echo "# Gate 1 — ${name}"
+  echo
+  if [ "$nq" -gt 0 ]; then
+    echo "**Status:** ${nq} question(s) need your answer before this spec can be approved."
+  elif has_content "$blocking"; then
+    echo "**Status:** the review could not resolve every finding. See \"Unresolved findings\"."
+  else
+    echo "**Status:** no open questions. The spec is ready for your approval."
+  fi
+  echo
+  echo "Spec: \`${feature}/spec.md\` · Request: \`${feature}/request.md\`"
+  echo
+
+  echo "## Questions"
+  echo
+  if [ "$nq" -gt 0 ]; then
+    echo "Answer in the chat (\"Q1: B, Q2: 30 days\") or fill in the Answer lines below."
+    echo "Nothing is assumed: a recommended option is only used if you choose it."
+    echo
+    printf '%s\n' "$questions" | awk '
+      /^[ \t]*$/ { blanks++; next }
+      /^### / { if (seen) print "- **Answer:**\n"; seen = 1; blanks = 0; print; next }
+      { while (blanks > 0) { print ""; blanks-- } print }
+      END { if (seen) print "- **Answer:**" }
+    '
+  else
+    echo "None."
+  fi
+  echo
+
+  if has_content "$blocking"; then
+    echo "## Unresolved findings"
+    echo
+    echo "The review loop reached its limit with these still open. They usually"
+    echo "mean the request itself needs to be clearer."
+    echo
+    printf '%s\n' "$blocking"
+    echo
+  fi
+
+  echo "## Traceability"
+  echo
+  echo "Each thing you asked for, the requirement that covers it, and the scenario that proves it."
+  echo
+  if [ -n "$trace" ]; then printf '%s\n' "$trace"; else echo "_The reviewer produced no table._"; fi
+  echo
+
+  echo "## Removed during review"
+  echo
+  echo "In the first draft of the spec, but not in your request. Say so if you want any of it back."
+  echo
+  if [ -n "$removed" ]; then printf '%s\n' "$removed"; else echo "None."; fi
+  echo
+
+  echo "## Suggestions not applied"
+  echo
+  if has_content "$suggestions"; then printf '%s\n' "$suggestions"; else echo "None."; fi
+  echo
+
+  echo "## Review trail"
+  echo
+  if [ -f "$ledger" ] && grep -q '^Spec review:' "$ledger"; then
+    grep '^Spec review:' "$ledger" | sed 's/^/- /'
+  else
+    echo "- $(basename "$latest")"
+  fi
+} > "$out"
+
+echo "questions: ${nq}"
+echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"

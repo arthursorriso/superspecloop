@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Extract one unit's full text from the feature's units file into a brief the
+# implementer reads in one call, so the unit text never passes through the
+# controller's context.
+#
+# The units file is produced by the tasks-to-briefs skill at
+# <workspace>/units.md, with one `### Unit N: <title>` heading per unit.
+#
+# Derived from Superpowers' task-brief (MIT, (c) 2025 Jesse Vincent).
+# See UPSTREAM.md.
+#
+# Usage: task-brief FEATURE_DIR UNIT_NUMBER [OUTFILE]
+# Default OUTFILE: <workspace>/unit-<N>-brief.md
+set -euo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: task-brief FEATURE_DIR UNIT_NUMBER [OUTFILE]" >&2
+  exit 2
+fi
+
+feature=$1
+n=$2
+dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/pipeline-workspace" "$feature")
+units="$dir/units.md"
+[ -f "$units" ] || { echo "no units file at $units — run the tasks-to-briefs skill first" >&2; exit 2; }
+
+out=${3:-"$dir/unit-${n}-brief.md"}
+
+awk -v n="$n" '
+  /^```/ { infence = !infence }
+  !infence && /^#+[ \t]+Unit[ \t]+[0-9]+/ {
+    inunit = ($0 ~ ("^#+[ \t]+Unit[ \t]+" n "([^0-9]|$)"))
+  }
+  !infence && inunit && /^#{1,2}[ \t]/ && !/^#+[ \t]+Unit[ \t]+[0-9]+/ { inunit = 0 }
+  inunit { print }
+' "$units" > "$out"
+
+if [ ! -s "$out" ]; then
+  echo "unit ${n} not found in ${units} (no heading matching 'Unit ${n}')" >&2
+  exit 3
+fi
+
+echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
+
+# Refresh the rulings file that travels with every dispatch, so it is never
+# staler than the brief it goes out with. No ledger yet (a preview run by
+# hand) means no rulings: stay quiet.
+"${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/rulings" "$feature" 2>/dev/null || true

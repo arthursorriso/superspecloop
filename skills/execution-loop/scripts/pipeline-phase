@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Say which phase of the pipeline a feature is in, from what exists on disk
+# and in its ledger — never from the controller's memory. Run it at the start
+# of a build and again after every phase and every stop: a session that was
+# compacted or restarted resumes at the right place.
+#
+# Prints the phase on the first line and the reason on the second:
+#   specify      no spec.md yet
+#   spec-review  spec.md exists, Gate 1 not approved
+#   plan         spec approved, no plan.md
+#   plan-review  plan.md exists, plan review not complete
+#   tasks        plan reviewed, no tasks.md
+#   analyze      tasks.md exists, no Analyze: line in the ledger
+#   execute      unchecked tasks remain
+#   finish       every task checked, branch not finished
+#   done         the ledger has a Finish: PR / merged / kept line
+#
+# Usage: pipeline-phase FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: pipeline-phase FEATURE_DIR" >&2
+  exit 2
+fi
+
+feature=${1%/}
+
+say() { printf '%s\n%s\n' "$1" "$2"; exit 0; }
+
+[ -f "$feature/spec.md" ] || say specify "no $feature/spec.md"
+
+dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/pipeline-workspace" "$feature")
+ledger="$dir/progress.md"
+has() { [ -f "$ledger" ] && grep -Eq "$1" "$ledger"; }
+
+has '^Gate 1: approved' || say spec-review "spec.md exists, no 'Gate 1: approved' in the ledger"
+[ -f "$feature/plan.md" ] || say plan "spec approved, no $feature/plan.md"
+has '^Plan review: complete' || say plan-review "plan.md exists, no 'Plan review: complete' in the ledger"
+[ -f "$feature/tasks.md" ] || say tasks "plan reviewed, no $feature/tasks.md"
+has '^Analyze:' || say analyze "tasks.md exists, no 'Analyze:' line in the ledger"
+
+open=$(grep -cE '^[[:space:]]*- \[ \]' "$feature/tasks.md" || true)
+[ "$open" -eq 0 ] || say execute "$open task(s) unchecked in tasks.md"
+
+has '^Finish: (PR|merged|kept)' || say finish "every task checked, no final 'Finish:' line in the ledger"
+say done "$(grep -E '^Finish: (PR|merged|kept)' "$ledger" | tail -1)"

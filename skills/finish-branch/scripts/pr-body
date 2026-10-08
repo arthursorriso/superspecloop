@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Assemble the pull-request description for a feature from the files the
+# pipeline already wrote, so the controller never has to retype a coverage
+# table or a list of rulings (and cannot quietly leave one out).
+#
+# Reads from the feature's workspace:
+#   pr-summary.md     required  what was built and why (written by the controller)
+#   final-review.md   optional  "## Spec Coverage" and "### Can Wait" sections
+#   progress.md       required  rulings, parked findings, flakes, unit and fix-round counts
+#   rulings.md        written here by the loop's `rulings` script, from the ledger
+#   final-gates.txt   optional  the last full gate run
+# Writes: <workspace>/pr-body.md   the description
+#         <workspace>/pr-title.txt the title: the summary's first line, "# " removed
+#
+# Usage: pr-body FEATURE_DIR BASE
+#   BASE is the commit the branch started from (git merge-base <base-branch> HEAD)
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "usage: pr-body FEATURE_DIR BASE" >&2
+  exit 2
+fi
+
+feature=$1
+base=$2
+git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
+
+dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/../../execution-loop/scripts/pipeline-workspace" "$feature")
+summary="$dir/pr-summary.md"
+review="$dir/final-review.md"
+ledger="$dir/progress.md"
+gates="$dir/final-gates.txt"
+out="$dir/pr-body.md"
+
+[ -s "$summary" ] || { echo "missing $summary — write the PR summary first" >&2; exit 2; }
+[ -f "$ledger" ] || { echo "missing $ledger" >&2; exit 2; }
+
+title=$(sed -n '1p' "$summary")
+case "$title" in
+  "# "*) title=${title#"# "} ;;
+  *) echo "first line of $summary must be '# <pull-request title>'" >&2; exit 2 ;;
+esac
+printf '%s\n' "$title" > "$dir/pr-title.txt"
+
+# Rulings come from the loop's `rulings` script, the one place that defines
+# what a ruling line is. It rewrites rulings.md from the ledger on every run.
+scripts="$(cd "$(dirname "$0")" && pwd)/../../execution-loop/scripts"
+"${BASH:-bash}" "$scripts/rulings" "$feature" >/dev/null
+rulings="$dir/rulings.md"
+ruling_count=$(grep -c '^- ' "$rulings" || true)
+
+section() {
+  "${BASH:-bash}" "$scripts/md-section" "$1" "$2"
+}
+
+{
+  sed -e '1d' "$summary" | sed -e '/./,$!d'
+  echo
+
+  echo "## Spec coverage"
+  echo
+  cov=""
+  cov=$(section "$review" "## Spec Coverage")
+  if [ -n "$cov" ]; then
+    printf '%s\n' "$cov"
+  else
+    echo "_No whole-branch review was recorded._"
+  fi
+  echo
+
+  echo "## Verification"
+  echo
+  if [ -f "$gates" ]; then
+    awk '
+      /^# Gates/ { sub(/^# /, ""); head = $0 }
+      /^## \$ / { cmd = substr($0, 6) }
+      /^## exit / { printf "- `%s` — %s\n", cmd, ($3 == 0 ? "passed" : "FAILED (exit " $3 ")") }
+      END { if (head != "") printf "\n%s\n", head }
+    ' "$gates"
+  else
+    echo "_No final gate run was recorded._"
+  fi
+  echo
+
+  echo "## Decisions the agent made"
+  echo
+  echo "Each one was taken without asking, with what it costs if it is wrong."
+  echo
+  if [ "$ruling_count" -gt 0 ]; then
+    grep '^- ' "$rulings"
+  else
+    echo "None."
+  fi
+  echo
+
+  echo "## Known issues, not fixed"
+  echo
+  wait_list=""
+  wait_list=$(section "$review" "### Can Wait")
+  parked=$(grep -E ': (parked|flake) ' "$ledger" | sed -e 's/^[-* ]*//' -e 's/^/- /' || true)
+  if [ -n "$wait_list" ] || [ -n "$parked" ]; then
+    [ -n "$wait_list" ] && printf '%s\n' "$wait_list"
+    [ -n "$parked" ] && printf '%s\n' "$parked"
+  else
+    echo "None."
+  fi
+  echo
+
+  echo "## Review trail"
+  echo
+  units=$(grep -cE '^Unit [0-9]+: complete' "$ledger" || true)
+  rounds=$(grep -cE '^Unit [0-9]+: fix round [0-9]+/5' "$ledger" || true)
+  echo "- ${units} unit(s), each reviewed for spec compliance and code quality; ${rounds} fix round(s)"
+  if grep -q '^Final review:' "$ledger"; then
+    grep '^Final review:' "$ledger" | tail -1 | sed 's/^/- /'
+  fi
+  if grep -q '^Final fix:' "$ledger"; then
+    grep '^Final fix:' "$ledger" | tail -1 | sed 's/^/- /'
+  fi
+  echo "- $(git rev-list --count "${base}..HEAD") commit(s): $(git rev-parse --short "$base")..$(git rev-parse --short HEAD)"
+} > "$out"
+
+echo "title: ${title}"
+echo "rulings: ${ruling_count}"
+echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"

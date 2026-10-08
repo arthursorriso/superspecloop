@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Resolve and ensure the scratch directory SuperSpecLoop uses for one Spec Kit
+# feature: spec and plan reviews, units file, task briefs, implementer
+# reports, review packages and the progress ledger. Prints the directory's absolute path.
+#
+# One directory per feature (.pipeline/<feature-dir-basename>/). Each
+# directory records its owning feature path in a `feature-path` marker so two
+# features that share a basename can never read each other's ledger: a stale
+# ledger misread as current progress makes the controller skip whole units.
+#
+# The directory lives in the working tree (not under .git/, which Claude Code
+# protects from agent writes). A self-ignoring .gitignore at .pipeline/ keeps
+# it out of `git status` without touching any tracked file.
+#
+# Derived from Superpowers' sdd-workspace (MIT, (c) 2025 Jesse Vincent).
+# See UPSTREAM.md.
+#
+# Usage: pipeline-workspace FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: pipeline-workspace FEATURE_DIR   (e.g. specs/001-login)" >&2
+  exit 2
+fi
+
+feature=${1%/}
+[ -d "$feature" ] || { echo "no such feature directory: $feature" >&2; exit 2; }
+[ -f "$feature/spec.md" ] || [ -f "$feature/tasks.md" ] \
+  || { echo "not a Spec Kit feature (no spec.md or tasks.md): $feature" >&2; exit 2; }
+
+slug=$(basename "$feature")
+root=$(git rev-parse --show-toplevel)
+base="$root/.pipeline"
+
+feature_abs=$(CDPATH= cd -- "$feature" && pwd -P)
+case "$feature_abs" in
+  "$root"/*) feature_id=${feature_abs#"$root"/} ;;
+  *)         feature_id=$feature_abs ;;
+esac
+
+owns() {
+  if [ -e "$1/feature-path" ]; then
+    [ "$(cat "$1/feature-path")" = "$feature_id" ]
+  else
+    mkdir -p "$1"
+    printf '%s\n' "$feature_id" > "$1/feature-path"
+  fi
+}
+
+dir="$base/$slug"
+if ! owns "$dir"; then
+  n=2
+  while ! owns "$base/$slug-$n"; do n=$((n + 1)); done
+  dir="$base/$slug-$n"
+fi
+
+printf '*\n' > "$base/.gitignore"
+CDPATH= cd -- "$dir" && pwd

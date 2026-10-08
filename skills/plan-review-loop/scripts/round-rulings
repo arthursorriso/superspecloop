@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Write the rulings file for one edit round of the plan review from the
+# ledger, so a ruling the editor applies is by construction a ruling the
+# human will see. The controller used to write this file by hand and the
+# ledger separately; in one run eight of nine plan rulings reached the editor
+# and never reached the ledger, the final report or the pull request.
+#
+# Reads ledger lines of the form
+#   Plan round <R>: Ruling: <what> — <why> — <what it costs if wrong>
+# Writes: <workspace>/plan-rulings-<R>.md, overwritten on each run
+#
+# Usage: round-rulings FEATURE_DIR ROUND
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "usage: round-rulings FEATURE_DIR ROUND" >&2
+  exit 2
+fi
+
+feature=${1%/}
+round=$2
+case "$round" in
+  ''|*[!0-9]*) echo "ROUND must be a number: $round" >&2; exit 2 ;;
+esac
+
+dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/../../execution-loop/scripts/pipeline-workspace" "$feature")
+ledger="$dir/progress.md"
+out="$dir/plan-rulings-${round}.md"
+[ -f "$ledger" ] || { echo "missing $ledger" >&2; exit 2; }
+
+line_re="^Plan round ${round}: Ruling( \\([^)]*\\))?:"
+count=$(grep -Ec "$line_re" "$ledger" || true)
+total=$(grep -Ec '^Plan round [0-9]+: Ruling( \([^)]*\))?:' "$ledger" || true)
+
+{
+  echo "# Plan rulings — round ${round}"
+  echo
+  echo "The controller's decisions for this round, copied from the ledger."
+  echo "Each one is binding on the plan; the spec outranks all of them."
+  echo
+  if [ "$count" -gt 0 ]; then
+    grep -E "$line_re" "$ledger" | sed -e "s/^Plan round ${round}: //" | awk '{ printf "%d. %s\n", NR, $0 }'
+  else
+    echo "None this round."
+  fi
+} > "$out"
+
+echo "round ${round}: ${count} ruling(s); ${total} in the plan review so far"
+echo "wrote ${out}"

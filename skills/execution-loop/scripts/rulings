@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Collect every decision the controller recorded in the ledger into one file
+# that implementers and reviewers read, so a ruling made in the plan review
+# or in Unit 2 still binds Unit 5 — and the reviewer of Unit 5 can tell when
+# new code breaks it. Before this file existed, only the controller and the
+# whole-branch reviewer saw the rulings.
+#
+# This is also the one definition of "a ruling line": pr-body builds the
+# pull-request description's decisions section from the file written here.
+#
+# A ruling line has "Ruling:" anywhere in it. A parenthetical before the
+# colon is tolerated ("Ruling (amends the Unit 1 ruling): ...") — a
+# controller wrote one that way and a plain "Ruling:" match dropped it.
+#
+# Writes: <workspace>/rulings.md, overwritten on each run
+# Usage:  rulings FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: rulings FEATURE_DIR" >&2
+  exit 2
+fi
+
+feature=${1%/}
+dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/pipeline-workspace" "$feature")
+ledger="$dir/progress.md"
+out="$dir/rulings.md"
+[ -f "$ledger" ] || { echo "missing $ledger" >&2; exit 2; }
+
+ruling_re='Ruling( \([^)]*\))?:'
+count=$(grep -Ec "$ruling_re" "$ledger" || true)
+
+{
+  echo "# Rulings — ${feature}"
+  echo
+  echo "Decisions the controller made on the human's behalf, in the order they"
+  echo "were made. A later line that says it amends an earlier one replaces it."
+  echo "Generated from the ledger; never edit this file."
+  echo
+  if [ "$count" -gt 0 ]; then
+    grep -E "$ruling_re" "$ledger" | sed -e 's/^[-* ]*//' -e 's/^/- /'
+  else
+    echo "None."
+  fi
+} > "$out"
+
+echo "rulings: ${count}"
+echo "wrote ${out}"

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Run a unit's verification commands (tests, typecheck, lint) from the
+# repository root and save their full output to a file the reviewer reads.
+# Only one PASS/FAIL line per command is printed, so the output never enters
+# the controller's context.
+#
+# Exit status: 0 when every command passed, 1 when any failed. A failure goes
+# back to the implementer; a reviewer is only dispatched on green gates.
+#
+# Usage: run-gates FEATURE_DIR LABEL COMMAND [COMMAND ...]
+#   e.g. run-gates specs/001-login 3 "npm test" "npm run typecheck" "npm run lint"
+# LABEL names the output file, overwritten on each run:
+#   3          -> <workspace>/unit-3-gates.txt
+#   3-round-1  -> <workspace>/unit-3-round-1-gates.txt   (after a fix round)
+#   final      -> <workspace>/final-gates.txt            (whole branch)
+set -uo pipefail
+
+if [ $# -lt 3 ]; then
+  echo "usage: run-gates FEATURE_DIR LABEL COMMAND [COMMAND ...]" >&2
+  exit 2
+fi
+
+feature=$1
+n=$2
+shift 2
+
+dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/pipeline-workspace" "$feature") || exit 2
+case "$n" in
+  [0-9]*) out="$dir/unit-${n}-gates.txt" ;;
+  *)      out="$dir/${n}-gates.txt" ;;
+esac
+root=$(git rev-parse --show-toplevel)
+
+{
+  echo "# Gates (${n}) at $(git rev-parse --short HEAD)"
+} > "$out"
+
+failed=0
+for cmd in "$@"; do
+  {
+    echo
+    echo "## \$ ${cmd}"
+  } >> "$out"
+  (cd "$root" && bash -c "$cmd") >> "$out" 2>&1
+  code=$?
+  echo "## exit ${code}" >> "$out"
+  if [ "$code" -eq 0 ]; then
+    echo "PASS  ${cmd}"
+  else
+    echo "FAIL (exit ${code})  ${cmd}"
+    failed=1
+  fi
+done
+
+echo "wrote ${out}"
+exit "$failed"

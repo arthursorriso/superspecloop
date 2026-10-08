@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Print the body of the first Markdown section whose heading line equals
+# HEADING exactly, up to the next heading of the same or a higher level.
+# Leading and trailing blank lines are dropped; headings inside code fences
+# are ignored. Prints nothing (exit 0) when the section does not exist.
+#
+# Usage: md-section FILE HEADING
+#   e.g. md-section final-review.md "## Spec Coverage"
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "usage: md-section FILE HEADING" >&2
+  exit 2
+fi
+[ -f "$1" ] || exit 0
+
+awk -v want="$2" '
+  function level(l,   n) { n = 0; while (substr(l, n + 1, 1) == "#") n++; return n }
+  /^```/ { infence = !infence }
+  !infence && /^#+[ \t]/ {
+    if (insec && level($0) <= lvl) exit
+    if (!insec && $0 == want) { insec = 1; lvl = level($0); next }
+  }
+  insec { lines[++n] = $0 }
+  END {
+    first = 1; while (first <= n && lines[first] ~ /^[ \t]*$/) first++
+    while (n >= first && lines[n] ~ /^[ \t]*$/) n--
+    for (i = first; i <= n; i++) print lines[i]
+  }
+' "$1"
