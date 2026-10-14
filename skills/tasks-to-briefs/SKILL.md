@@ -49,20 +49,19 @@ It prints the directory where `units.md` goes. Then read, once each:
 A unit is **one review surface**: a coherent change a reviewer can judge in
 one diff. Group Spec Kit tasks into units with these rules, in order:
 
-1. **Never cross a phase.** Setup, Foundational, each User Story phase and
-   Polish are separate. A unit belongs to exactly one phase. One exception:
-   a Setup phase whose tasks produce nothing a reviewer can judge on its own
-   (creating directories, empty placeholder files) merges into the first
-   unit that uses what it creates. A unit costs an implementer and a
-   reviewer; two empty folders do not earn one.
+1. **One unit per user story.** Each User Story phase — its tests and its
+   implementation — is one unit. Setup and Foundational merge into the first
+   story's unit, and Polish into the last story's unit, unless one of them is
+   large enough to be a unit of its own (roughly 6 tasks or more). A feature
+   with three stories is three or four units, not nine: every unit costs a
+   full implement-check-close cycle, and in one measured run nine units for
+   three stories made the controller the most expensive part of the run.
 2. **Tests travel with the code they verify.** A story's test tasks go into
    the same unit as the implementation tasks those tests cover. The
    implementer writes the failing tests first (TDD), then the code.
-3. **One unit per phase by default.** A user-story phase — its tests and its
-   implementation — is one unit. Split a phase only when it would exceed
-   roughly 6 tasks or 400 changed lines, and then at the natural seams
-   (model → service → endpoint). Every unit costs an implementer and a
-   reviewer; splitting a small story in two doubles that and creates
+3. **Split a story only when it is big** — roughly 10 tasks or 600 changed
+   lines — and then at the natural seams (model → service → endpoint, or
+   backend → frontend). Splitting a small story doubles the cost and creates
    ordering problems between the halves.
 4. **Batch same-shape trivia.** Several small config/setup tasks of the same
    kind become one unit.
@@ -107,6 +106,7 @@ package.json / pyproject.toml / Makefile if the plan does not say). Write
 ### Unit 1: <short imperative title>
 
 **Covers tasks:** T010, T012, T013
+**Kind:** code
 **Phase:** Phase 3 — User Story 1 (P1)
 **Depends on units:** none | 1, 2
 
@@ -157,7 +157,11 @@ source lines. "None" if none.
 ````
 
 Unit headings must be exactly `### Unit N: <title>` with N counting from 1 —
-the `task-brief` script extracts a unit by that heading. Use `####` for the
+the `task-brief` script extracts a unit by that heading. "Covers tasks" lists
+every task ID, comma-separated: the `unit-close` script reads it to know which
+tasks the implementer must report on. "Kind" is `code`, or `docs-config` for a
+unit with no logic to get wrong (documentation, configuration, renames) — it
+picks the implementer's model. Use `####` for the
 subsections inside a unit, and never put a `#` or `##` heading inside one.
 
 ## Self-check before reporting
@@ -169,8 +173,8 @@ Write down each check as you do it:
 - Every FR, user-story acceptance scenario and edge case in spec.md appears
   in some unit's Requirements, or in Gaps.
 - Every requirement in a unit maps to at least one "Tests required" line.
-- No unit crosses a phase, except a trivial Setup merged into its first
-  user. Dependencies point only to earlier units.
+- One unit per story (Setup, Foundational and Polish merged unless large),
+  split only past the size rule. Dependencies point only to earlier units.
 - No unit needs something only a later unit builds — including in its
   tests: a test that needs data in a certain state needs a way to reach that
   state by this unit. If the task order makes that impossible, report it

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Start (or resume) one execution unit: record the commit it starts from,
+# write its brief and refresh the rulings file. Everything the unit runner
+# needs to dispatch the implementer comes out of this one call.
+#
+# Prints one line: unit, base, brief path, rulings count, mode, kind.
+#   mode — "lean" (no per-unit review, the default) or "full", from the
+#          ledger's "Mode:" line
+#   kind — the unit's "**Kind:**" line in units.md: "code" or "docs-config"
+#
+# Usage: unit-start FEATURE_DIR UNIT_NUMBER
+# Writes: <workspace>/unit-N.base (kept if it already exists: a resumed unit
+#         keeps its original start), <workspace>/unit-N-brief.md
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "usage: unit-start FEATURE_DIR UNIT_NUMBER" >&2
+  exit 2
+fi
+
+feature=${1%/}
+n=$2
+here="$(cd "$(dirname "$0")" && pwd)"
+dir=$("${BASH:-bash}" "$here/pipeline-workspace" "$feature")
+ledger="$dir/progress.md"
+[ -f "$ledger" ] || { echo "missing $ledger" >&2; exit 2; }
+
+if grep -Eq "^Unit ${n}: complete" "$ledger"; then
+  echo "unit ${n}: already complete — $(grep -E "^Unit ${n}: complete" "$ledger" | tail -1)"
+  exit 3
+fi
+
+# A missing unit is exit 4, never 3: 3 means "already complete".
+"${BASH:-bash}" "$here/task-brief" "$feature" "$n" >/dev/null || exit 4
+
+basefile="$dir/unit-${n}.base"
+if [ -s "$basefile" ]; then
+  base=$(cat "$basefile")
+  resumed=" (resumed: $(git rev-list --count "${base}..HEAD") commit(s) since)"
+  # Reviews from an earlier attempt judged other code: move them aside so
+  # unit-close can only accept a verdict this attempt produced.
+  old=$(ls "$dir" | grep -E "^unit-${n}-review(-round-[0-9]+)?\.md$" || true)
+  if [ -n "$old" ]; then
+    k=1
+    while [ -d "$dir/unit-${n}-attempt-${k}" ]; do k=$((k + 1)); done
+    mkdir -p "$dir/unit-${n}-attempt-${k}"
+    for f in $old; do mv "$dir/$f" "$dir/unit-${n}-attempt-${k}/"; done
+    resumed="${resumed}, earlier reviews moved to unit-${n}-attempt-${k}/"
+  fi
+else
+  base=$(git rev-parse HEAD)
+  printf '%s\n' "$base" > "$basefile"
+  resumed=""
+fi
+
+rulings=$(grep -c '^- ' "$dir/rulings.md" 2>/dev/null || true)
+# Each attempt starts a fresh span of the ledger: unit-close only counts
+# parked findings recorded after the last "started" line.
+"${BASH:-bash}" "$here/ledger" "$feature" "Unit ${n}: started (base $(git rev-parse --short "$base"))" >/dev/null
+
+mode=$(sed -n 's/^Mode: \([a-z]*\).*/\1/p' "$ledger" | tail -1)
+[ -n "$mode" ] || mode=lean
+kind=$(sed -n 's/^\*\*Kind:\*\*[[:space:]]*\([a-z-]*\).*/\1/p' "$dir/unit-${n}-brief.md" | head -1)
+[ -n "$kind" ] || kind=code
+
+echo "unit ${n}: base $(git rev-parse --short "$base")${resumed}, brief $dir/unit-${n}-brief.md, rulings ${rulings:-0}, mode ${mode}, kind ${kind}"

@@ -1,7 +1,7 @@
 {
   "name": "superspecloop",
   "description": "Spec-driven agentic pipeline for Claude Code on top of GitHub Spec Kit: reviews the spec against your request and the plan against the spec and the codebase, implements each user story test-first with a fresh subagent and a review-fix loop, then reviews the whole branch and writes the pull request.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Arthur",
     "url": "https://github.com/arthursorriso"

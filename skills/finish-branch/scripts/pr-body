@@ -6,6 +6,9 @@
 # Reads from the feature's workspace:
 #   pr-summary.md     required  what was built and why (written by the controller)
 #   final-review.md   optional  "## Spec Coverage" and "### Can Wait" sections
+#   final-review-round-1.md  optional  "### Spec Coverage After Fixes": the
+#                     re-reviewed rows that replace the first table's ⚠️/❌ rows
+#   coverage-gaps.md  optional  the rows the fix wave had to address
 #   progress.md       required  rulings, parked findings, flakes, unit and fix-round counts
 #   rulings.md        written here by the loop's `rulings` script, from the ledger
 #   final-gates.txt   optional  the last full gate run
@@ -57,12 +60,50 @@ section() {
   sed -e '1d' "$summary" | sed -e '/./,$!d'
   echo
 
+  # Spec items the branch does not meet come first: they are open decisions
+  # for the human, never rulings.
+  unmet=$(grep -E '^Final: spec not met' "$ledger" | sed -e 's/^Final: spec not met — /- /' || true)
+  if [ -n "$unmet" ]; then
+    echo "## Spec items not met"
+    echo
+    echo "The branch does not do what the spec says here. Each one needs a decision:"
+    echo "fix the code, or change the spec."
+    echo
+    printf '%s\n' "$unmet"
+    echo
+  fi
+
   echo "## Spec coverage"
   echo
   cov=""
   cov=$(section "$review" "## Spec Coverage")
   if [ -n "$cov" ]; then
-    printf '%s\n' "$cov"
+    # The first table predates the fix wave. Rows the re-review judged again
+    # replace their originals; a gap row nobody re-judged says so, instead of
+    # passing off a pre-fix status as the branch's current state.
+    updates=$(section "$dir/final-review-round-1.md" "### Spec Coverage After Fixes" | grep -E '^\|' || true)
+    gaps=""
+    [ -f "$dir/coverage-gaps.md" ] && gaps=$(grep -E '^\|' "$dir/coverage-gaps.md" | grep -E '❌|⚠️' || true)
+    printf '%s\n' "$cov" | UPDATES="$updates" GAPS="$gaps" perl -e '
+      sub key { my $r = shift; $r =~ s/^\s*\|\s*//; my ($k) = split /\s*\|/, $r, 2; $k //= ""; $k =~ s/\s+$//; return $k }
+      my (%upd, %gap);
+      for (split /\n/, $ENV{UPDATES} // "") { next unless /^\|/ && !/^\|\s*-/; my $k = key($_); next if $k eq "" || $k eq "Spec item"; $upd{$k} = $_ }
+      for (split /\n/, $ENV{GAPS} // "")    { next unless /^\|/; $gap{key($_)} = 1 }
+      my ($replaced, $stale) = (0, 0);
+      while (my $l = <STDIN>) {
+        chomp $l;
+        if ($l =~ /^\|/ && $l !~ /^\|\s*-/) {
+          my $k = key($l);
+          if (exists $upd{$k}) { $l = $upd{$k}; $replaced++ }
+          elsif ($gap{$k}) { $l =~ s/\s*\|\s*$/ (not re-checked after the fixes) |/; $stale++ }
+        }
+        print "$l\n";
+      }
+      print "\n_${replaced} row(s) re-checked after the fix wave._\n" if $replaced;
+      print "\n_${stale} row(s) were in the fix wave but not re-checked: their status is from before the fixes._\n" if $stale;
+      my $still = grep { /❌|⚠️/ } values %upd;
+      print STDERR "spec items still not met after the fixes: $still\n" if $still;
+    '
   else
     echo "_No whole-branch review was recorded._"
   fi
@@ -95,9 +136,13 @@ section() {
 
   echo "## Known issues, not fixed"
   echo
+  # Only the list items: a reviewer's "None." or a closing paragraph under
+  # the heading is not a known issue. Minor issues were not in the fix wave,
+  # so they ship as they are and belong here too.
+  bullets() { awk '/^- / { item = 1; print; next } /^[ \t]+[^ \t]/ && item { print; next } { item = 0 }'; }
   wait_list=""
-  wait_list=$(section "$review" "### Can Wait")
-  parked=$(grep -E ': (parked|flake) ' "$ledger" | sed -e 's/^[-* ]*//' -e 's/^/- /' || true)
+  wait_list=$( { section "$review" "### Can Wait"; section "$review" "### Minor (Nice to Have)"; } | bullets)
+  parked=$(grep -E ': (parked|flake|task T[0-9]+ not done) ' "$ledger" | sed -e 's/^[-* ]*//' -e 's/^/- /' || true)
   if [ -n "$wait_list" ] || [ -n "$parked" ]; then
     [ -n "$wait_list" ] && printf '%s\n' "$wait_list"
     [ -n "$parked" ] && printf '%s\n' "$parked"
@@ -110,7 +155,12 @@ section() {
   echo
   units=$(grep -cE '^Unit [0-9]+: complete' "$ledger" || true)
   rounds=$(grep -cE '^Unit [0-9]+: fix round [0-9]+/5' "$ledger" || true)
-  echo "- ${units} unit(s), each reviewed for spec compliance and code quality; ${rounds} fix round(s)"
+  mode=$(sed -n 's/^Mode: \([a-z]*\).*/\1/p' "$ledger" | tail -1)
+  if [ "$mode" = full ]; then
+    echo "- ${units} unit(s), each reviewed for spec compliance and code quality; ${rounds} fix round(s)"
+  else
+    echo "- ${units} unit(s), each gated on the suite, typecheck and lint; reviewed as a whole branch"
+  fi
   if grep -q '^Final review:' "$ledger"; then
     grep '^Final review:' "$ledger" | tail -1 | sed 's/^/- /'
   fi

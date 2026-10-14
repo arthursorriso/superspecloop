@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# List the spec items the whole-branch review found not delivered (❌) or not
+# shown to be tested (⚠️), from its "## Spec Coverage" table. Every one of them
+# joins the fix wave; none can be declined or ruled away, because a spec item
+# the branch does not meet is a decision only the human can take.
+#
+# Prints: "spec coverage gaps: <count>" and the file path when count > 0.
+# Writes: <workspace>/coverage-gaps.md
+#
+# Usage: coverage-gaps FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: coverage-gaps FEATURE_DIR" >&2
+  exit 2
+fi
+
+feature=${1%/}
+loop="$(cd "$(dirname "$0")" && pwd)/../../execution-loop/scripts"
+dir=$("${BASH:-bash}" "$loop/pipeline-workspace" "$feature")
+review="$dir/final-review.md"
+[ -f "$review" ] || { echo "no $review — run the whole-branch review first" >&2; exit 2; }
+
+rows=$("${BASH:-bash}" "$loop/md-section" "$review" "## Spec Coverage" \
+  | grep -E '^\|' | grep -E '❌|⚠️' | grep -vE '^\|[[:space:]]*-' || true)
+count=$(printf '%s\n' "$rows" | sed -e '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
+
+if [ "$count" -gt 0 ]; then
+  header=$("${BASH:-bash}" "$loop/md-section" "$review" "## Spec Coverage" | grep -E '^\|' | head -2)
+  {
+    echo "# Spec items not met — ${feature}"
+    echo
+    echo "From the whole-branch review. Each one is fixed in the fix wave, or it"
+    echo "goes to the human as an open question. None is declined or ruled away."
+    echo
+    printf '%s\n' "$header"
+    printf '%s\n' "$rows"
+  } > "$dir/coverage-gaps.md"
+  echo "spec coverage gaps: ${count}"
+  echo "wrote $dir/coverage-gaps.md"
+else
+  rm -f "$dir/coverage-gaps.md"
+  echo "spec coverage gaps: 0"
+fi

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Append one line to the feature's ledger. Scripts and agents use it instead
+# of shell redirection, so a line can never be written to the wrong file or
+# split across two.
+#
+# Usage: ledger FEATURE_DIR "line"
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "usage: ledger FEATURE_DIR \"line\"" >&2
+  exit 2
+fi
+
+dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/pipeline-workspace" "${1%/}")
+ledger="$dir/progress.md"
+[ -f "$ledger" ] || { echo "missing $ledger" >&2; exit 2; }
+
+line=$(printf '%s' "$2" | tr '\n' ' ' | sed -e 's/[[:space:]]*$//')
+[ -n "$line" ] || { echo "empty line" >&2; exit 2; }
+printf '%s\n' "$line" >> "$ledger"
+echo "ledger: $line"

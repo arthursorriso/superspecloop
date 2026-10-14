@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Check one unit's work after the implementer reports DONE: there are new
+# commits, nothing under specs/ or .specify/ changed, the gates pass on this
+# exact HEAD, and the review package is written. One line per check.
+#
+# ROUND 0 (the default) checks the unit from its start; ROUND R checks a fix
+# round, and its package covers only what changed since the previous check.
+# Exit status: 0 when every check passed, 1 when any failed.
+#
+# Usage: unit-check FEATURE_DIR UNIT_NUMBER [ROUND]
+# Writes: <workspace>/unit-N[-round-R]-gates.txt, the review package,
+#         <workspace>/unit-N.checked (the HEAD this check saw)
+set -uo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: unit-check FEATURE_DIR UNIT_NUMBER [ROUND]" >&2
+  exit 2
+fi
+
+feature=${1%/}
+n=$2
+round=${3:-0}
+here="$(cd "$(dirname "$0")" && pwd)"
+dir=$("${BASH:-bash}" "$here/pipeline-workspace" "$feature") || exit 2
+[ -s "$dir/unit-${n}.base" ] || { echo "unit ${n} not started — run unit-start first" >&2; exit 2; }
+base=$(cat "$dir/unit-${n}.base")
+head=$(git rev-parse HEAD)
+failed=0
+
+commits=$(git rev-list --count "${base}..HEAD")
+if [ "$commits" -gt 0 ]; then
+  echo "PASS  commits: ${commits} since $(git rev-parse --short "$base")"
+else
+  echo "FAIL  commits: none since $(git rev-parse --short "$base") — the implementer committed nothing"
+  failed=1
+fi
+
+touched=$(git diff --name-only "${base}..HEAD" -- specs .specify | tr '\n' ' ')
+if [ -z "$touched" ]; then
+  echo "PASS  specs untouched"
+else
+  echo "FAIL  specs touched: ${touched}— implementers never change specs/ or .specify/; revert those commits"
+  failed=1
+fi
+
+if [ "$round" -eq 0 ]; then label="$n"; else label="${n}-round-${round}"; fi
+if "${BASH:-bash}" "$here/run-gates" "$feature" "$label" >/dev/null; then
+  echo "PASS  gates: ${dir}/unit-${label}-gates.txt"
+else
+  echo "FAIL  gates: ${dir}/unit-${label}-gates.txt"
+  failed=1
+fi
+
+if [ "$commits" -gt 0 ]; then
+  if [ "$round" -eq 0 ]; then
+    from=$base
+  else
+    from=$(cat "$dir/unit-${n}.checked" 2>/dev/null || echo "$base")
+  fi
+  if [ "$from" != "$head" ]; then
+    pkg=$("${BASH:-bash}" "$here/review-package" "$feature" "$from" "$head" 2>&1 | sed -n 's/^wrote \([^:]*\):.*/\1/p' | head -1)
+    echo "PASS  package: ${pkg} ($(git rev-parse --short "$from")..$(git rev-parse --short "$head"))"
+  else
+    echo "FAIL  package: no new commits since the last check"
+    failed=1
+  fi
+fi
+
+# Only a passing check moves the mark: the next fix round's package must
+# cover everything since the last state a reviewer could have seen.
+# Rewriting it for an unchanged HEAD would make an existing review look
+# older than the check, and unit-close would refuse it.
+if [ "$failed" -eq 0 ] && [ "$(cat "$dir/unit-${n}.checked" 2>/dev/null)" != "$head" ]; then
+  printf '%s\n' "$head" > "$dir/unit-${n}.checked"
+fi
+exit "$failed"

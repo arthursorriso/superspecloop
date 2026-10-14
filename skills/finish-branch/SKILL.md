@@ -36,12 +36,14 @@ branch that is not finished.
 
 1. `WS/progress.md` exists, its first line names FEATURE, and every unit in
    `WS/units.md` has a `Unit <N>: complete` line.
-2. `FEATURE/tasks.md` has no unchecked task (`- [ ]`).
+2. Every task still unchecked in `FEATURE/tasks.md` (`- [ ]`) has a
+   `Unit <N>: task <ID> not done` line in the ledger. Those reach the human
+   as open items; an unchecked task with no line is a unit closed wrongly.
 3. The working tree is clean.
 4. **Gates on this exact tree:**
-   `bash ../execution-loop/scripts/run-gates FEATURE final "<full suite>" "<typecheck>" "<lint>"`
-   with the Verification Commands in `WS/global.md`. A green run earlier in the
-   session proves nothing about the tree you are about to integrate.
+   `bash ../execution-loop/scripts/run-gates FEATURE final` — the commands
+   the baseline saved. A green run earlier in the session proves nothing
+   about the tree you are about to integrate.
 
 If the ledger already has a `Final review:` line, the review was done:
 resume at the first step below that has no ledger line.
@@ -95,20 +97,28 @@ no "the units already covered X". It reads the spec and decides.
 Append to the ledger:
 `Final review: <Yes | With fixes | No> (<C> critical, <I> important, <F> to fix before merge, <W> can wait)`
 
+**Spec items not met.** Run `bash scripts/coverage-gaps FEATURE`. Every row
+it lists (❌ or ⚠️ in the coverage table) joins the fix list, whatever any
+ruling says: a ruling cannot change the spec, and code that departs from the
+spec is fixed or put to the human — never ruled acceptable, declined or
+called out of scope.
+
 **Declined to Judge.** Rule on each line the reviewer set aside — in scope
 (it joins the fix list) or out of scope (say why) — as a `Ruling:` line.
-Nothing set aside is dropped silently. Then run
+Nothing set aside is dropped silently, and nothing about meeting the spec is
+set aside at all. Then run
 `bash ../execution-loop/scripts/rulings FEATURE`, so `WS/rulings.md` has
 these too before anyone is dispatched.
 
 ## Step 4: One Fix Wave
 
-The fix list is every Critical and Important issue, every Fix Before Merge
-item, and anything you ruled in scope. If it is empty, skip to Step 5.
+The fix list is every row of `WS/coverage-gaps.md`, every Critical and
+Important issue, every Fix Before Merge item, and anything you ruled in
+scope. If it is empty, skip to Step 5.
 
-A finding that conflicts with the spec or the plan is yours to rule on
-first, with the spec as authority; ledger the ruling and leave the finding
-in or out accordingly.
+A finding that conflicts with the plan is yours to rule on, with the spec as
+authority. A finding that the code departs from the spec is not: the fix is
+to make the code do what the spec says.
 
 Dispatch **one** `superspecloop:implementer` (`sonnet`, or `opus` when the
 list includes a design-level issue) with the whole list — not one fixer per
@@ -129,21 +139,30 @@ Record `FIX_BASE=$(git rev-parse HEAD)` before dispatching. When it reports
 DONE:
 
 1. `git diff --stat FIX_BASE HEAD -- FEATURE .specify` is empty.
-2. `bash ../execution-loop/scripts/run-gates FEATURE final "<suite>" "<typecheck>" "<lint>"`
-   — red gates go back to the same implementer once.
+2. `bash ../execution-loop/scripts/run-gates FEATURE final` — red gates go
+   back to the same implementer once.
 3. `bash ../execution-loop/scripts/review-package FEATURE FIX_BASE HEAD`, then
    dispatch `superspecloop:re-reviewer` with: the spec path as the brief, the
    fix list verbatim, the report file, the diff path, `WS/final-gates.txt`,
-   `WS/rulings.md`, and the review file `WS/final-review-round-1.md`.
+   `WS/rulings.md`, the review file `WS/final-review-round-1.md`, and — when
+   it exists — `WS/coverage-gaps.md` as the coverage gaps file. Its
+   `### Spec Coverage After Fixes` table is what the pull request shows for
+   those rows: the first review's table is from before the fixes, and a
+   description that still shows ⚠️ on fixed rows tells the human reviewer
+   about problems that are gone.
 
 **There is no second wave.** Adjudicate whatever the re-review leaves open,
 exactly as the loop's breaker does:
 
 - reviewer wrong or contestable → `Final: parked — <finding> — Ruling: <why the code stands>`
 - real but harmless to ship → park it the same way, ruling that it is real
-- real and it makes the branch wrong against the spec → do not park it.
-  Report it to the human in Step 6 as an open defect; the branch is not
-  ready, and saying so is the correct result.
+- a spec item still not met (a row still ⚠️ or ❌ in
+  `### Spec Coverage After Fixes`, or any finding that the code departs
+  from the spec) → never parked, never ruled. Record it with
+  `bash ../execution-loop/scripts/ledger FEATURE "Final: spec not met — <spec item> — <what the code does instead>"`.
+  It goes first in the pull-request description and first in Step 6, as a
+  decision for the human: fix the code, or change the spec. The branch is
+  not ready until they decide, and saying so is the correct result.
 
 Append: `Final fix: (<X> addressed, <Y> open; commits <a7>..<b7>)`
 
@@ -161,12 +180,14 @@ Spec: `FEATURE/spec.md`
 ```
 
 Then `bash scripts/pr-body FEATURE FEATURE_BASE`. It writes the title to
-`WS/pr-title.txt` and assembles `WS/pr-body.md` from the rest of the summary, the reviewer's Spec Coverage table, the
+`WS/pr-title.txt` and assembles `WS/pr-body.md` from the rest of the summary, the reviewer's Spec Coverage table
+(with the rows the re-review judged again replaced by their new status), the
 final gate run, every `Ruling:` line in the ledger, the Can Wait and parked
 findings, and the review trail. Do not retype any of those: the script is
 what guarantees no ruling is left out.
 
-It prints how many rulings it found. If the body is missing something, the
+It prints how many rulings it found, and how many spec items the re-review
+still found not met — each of those needs its `Final: spec not met` line. If the body is missing something, the
 source is wrong, not the body: fix the ledger line or the review file and run
 the script again. Never edit `pr-body.md` by hand — the next run overwrites
 it, and a hand-edited body is one nobody can regenerate.
@@ -185,7 +206,9 @@ anything is integrated.
 Your message to the human, in this order:
 
 1. One line: what was built, units, commit range, final review verdict.
-2. **Open defects**, if any survived Step 4 — first, not buried.
+2. **Spec items not met** — every `Final: spec not met` line, first, each
+   as a decision: "the spec says X, the code does Y — fix it, or change the
+   spec?" Then any other open defect that survived Step 4.
 3. **Rulings I made** — every `Ruling:` line in the ledger, each with what
    it costs if wrong. Exhaustive, but sorted for a reader with five
    minutes: first the ones that could cost something (behavior a user
@@ -193,8 +216,8 @@ Your message to the human, in this order:
    out of scope), in full; then the ones whose cost is none, one short line
    each under "Routine". Sixteen rulings in one flat list hide the two that
    matter.
-4. Known issues not fixed (Can Wait and parked), and every `flake` line in
-   the ledger.
+4. Known issues not fixed (Can Wait and parked), every `task … not done`
+   line, and every `flake` line in the ledger.
 5. The pull-request title and the path of `WS/pr-body.md`.
 6. The path of `WS/metrics.md`, with one line: the Session block of
    `/usage`, run now in this session, is the token count; paste it at the
@@ -273,7 +296,7 @@ Runs for a local merge and a confirmed discard only.
 | "The gates passed at the end of the loop" | Run them on the tree you are about to integrate. |
 | "I'll dispatch a fixer per finding, in parallel" | One fixer, the whole list. Per-finding fixers each rebuild context and re-run the suite, and their commits conflict. |
 | "The re-review left one thing open — one more wave" | There is no second wave. Park it with a ruling, or report an open defect. |
-| "I'll write the coverage table into the PR myself" | `pr-body` copies the reviewer's table. A table you retype is a table you can get wrong. |
+| "I'll write the coverage table into the PR myself" | `pr-body` copies the reviewer's table, and the re-review's rows for what the fixes touched. A table you retype is a table you can get wrong. |
 | "This ruling is too small to list" | The list is exhaustive. A ruling the human never sees was a decision made in secret. |
 | "They picked that option, so they accepted what follows from it" | They accepted what they were shown. If the consequence was not in the Gate 1 message, tell them now, as news. |
 | "They obviously want a pull request" | Present the three options and wait. |

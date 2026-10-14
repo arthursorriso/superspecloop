@@ -7,16 +7,18 @@
 # Exit status: 0 when every command passed, 1 when any failed. A failure goes
 # back to the implementer; a reviewer is only dispatched on green gates.
 #
-# Usage: run-gates FEATURE_DIR LABEL COMMAND [COMMAND ...]
+# Usage: run-gates FEATURE_DIR LABEL [COMMAND ...]
 #   e.g. run-gates specs/001-login 3 "npm test" "npm run typecheck" "npm run lint"
+# With no COMMAND, the commands the baseline script saved to
+# <workspace>/gates.conf are run, in order.
 # LABEL names the output file, overwritten on each run:
 #   3          -> <workspace>/unit-3-gates.txt
 #   3-round-1  -> <workspace>/unit-3-round-1-gates.txt   (after a fix round)
 #   final      -> <workspace>/final-gates.txt            (whole branch)
 set -uo pipefail
 
-if [ $# -lt 3 ]; then
-  echo "usage: run-gates FEATURE_DIR LABEL COMMAND [COMMAND ...]" >&2
+if [ $# -lt 2 ]; then
+  echo "usage: run-gates FEATURE_DIR LABEL [COMMAND ...]" >&2
   exit 2
 fi
 
@@ -25,6 +27,13 @@ n=$2
 shift 2
 
 dir=$("${BASH:-bash}" "$(cd "$(dirname "$0")" && pwd)/pipeline-workspace" "$feature") || exit 2
+if [ $# -eq 0 ]; then
+  [ -s "$dir/gates.conf" ] || { echo "no commands given and no $dir/gates.conf — run the baseline script first" >&2; exit 2; }
+  # bash 3.2 has no mapfile: rebuild the positional parameters line by line.
+  while IFS="$(printf '\t')" read -r _name cmd; do
+    [ -n "$cmd" ] && set -- "$@" "$cmd"
+  done < "$dir/gates.conf"
+fi
 case "$n" in
   [0-9]*) out="$dir/unit-${n}-gates.txt" ;;
   *)      out="$dir/${n}-gates.txt" ;;

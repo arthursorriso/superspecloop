@@ -9,7 +9,7 @@
     {
       "name": "superspecloop",
       "description": "Spec-driven agentic pipeline for Claude Code, on top of GitHub Spec Kit.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./"
     }
   ]

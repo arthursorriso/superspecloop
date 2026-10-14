@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Record the feature's verification commands and run them once, before any
+# unit changes the code. The commands are saved to <workspace>/gates.conf so
+# every later gate run (unit-check, the finish step) uses exactly the same
+# ones, and the result goes to the ledger as one line.
+#
+# Commands are given in this order: full suite, typecheck, lint. Pass "-"
+# for one the project does not have.
+#
+# Usage: baseline FEATURE_DIR SUITE TYPECHECK LINT
+# Writes: <workspace>/gates.conf, <workspace>/baseline-gates.txt
+set -uo pipefail
+
+if [ $# -ne 4 ]; then
+  echo "usage: baseline FEATURE_DIR SUITE TYPECHECK LINT   (\"-\" for none)" >&2
+  exit 2
+fi
+
+feature=${1%/}
+here="$(cd "$(dirname "$0")" && pwd)"
+dir=$("${BASH:-bash}" "$here/pipeline-workspace" "$feature") || exit 2
+conf="$dir/gates.conf"
+
+: > "$conf"
+names=""
+set -- "$2" "$3" "$4"
+for name in suite typecheck lint; do
+  cmd=$1; shift
+  [ "$cmd" = "-" ] && continue
+  printf '%s\t%s\n' "$name" "$cmd" >> "$conf"
+  names="$names $name"
+done
+[ -s "$conf" ] || { echo "no commands given" >&2; exit 2; }
+
+out=$("${BASH:-bash}" "$here/run-gates" "$feature" baseline)
+result=$(printf '%s\n' "$out" | awk -F'\t' '
+  /^(PASS|FAIL)/ { s = ($1 ~ /^PASS/) ? "PASS" : "FAIL"; r[++n] = s }
+  END { for (i = 1; i <= n; i++) printf "%s%s", r[i], (i < n ? " " : "") }')
+line="Baseline:"
+i=0
+for name in $names; do
+  i=$((i + 1))
+  s=$(printf '%s\n' "$result" | awk -v i="$i" '{ print $i }')
+  line="$line $name $s,"
+done
+line=${line%,}
+"${BASH:-bash}" "$here/ledger" "$feature" "$line" >/dev/null
+printf '%s\n' "$out"
+echo "$line"

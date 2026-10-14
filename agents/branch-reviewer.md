@@ -55,6 +55,11 @@ and every edge case in the spec — all of them, in the spec's order:
 
 Every ⚠️ and ❌ row is also an Important or Critical issue in Part 2.
 
+Code that does something other than what the spec says is ❌, even when a
+`Ruling:` in the ledger allowed it, and even when the departure looks like
+an improvement: a ruling cannot change the spec, and only the human can.
+Say in the row what the spec says and what the code does.
+
 ## Part 2: Whole-Branch Issues
 
 Look for what only shows across units:

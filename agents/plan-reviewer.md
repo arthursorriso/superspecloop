@@ -86,8 +86,14 @@ Reinvention check was done.
 - **Question** — a real technical trade-off with no winner determined by the
   spec, the constitution or the codebase: two viable designs, a dependency
   worth debating, a data-model choice that is expensive to reverse.
-- **Spec gap** — the plan exposes something the spec does not answer or gets
-  wrong. Do not let the plan paper over it. Only the human changes the spec.
+- **Spec gap** — anything that only a change to the spec can settle: the
+  spec leaves a question open, gets something wrong, or asks for something
+  that cannot be built as written; or the plan departs from what the spec
+  says and should not simply be brought back in line (because the spec looks
+  wrong to you). Do not let the plan paper over it, and do not offer a
+  departure from the spec as a Question option: it is a spec gap. Only the
+  human changes the spec. A plan that departs from the spec where the spec is
+  plainly right is Blocking: the fix is to follow the spec.
 - **Suggestion** — better, but correct without it.
 
 ## Re-Review Mode
@@ -133,7 +139,14 @@ Numbered. Each: the kind, where in the plan documents, the evidence
 
 ## Spec Gaps
 
-One per line: what the spec leaves open or gets wrong, and where.
+Each one a question for the human, who owns the spec:
+
+### S1: <what has to be decided>
+
+- **The spec says:** <quote, with its identifier>
+- **The problem:** <why building it as written is wrong, impossible or ambiguous; or what the plan does instead>
+- **Options:** <keep the spec as it is, and what that means for the plan · change the spec to …>
+- **Recommended:** <option> — <reason>
 
 ## Suggestions
 

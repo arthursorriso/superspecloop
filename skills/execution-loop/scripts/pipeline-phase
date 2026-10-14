@@ -8,11 +8,12 @@
 #   specify      no spec.md yet
 #   spec-review  spec.md exists, Gate 1 not approved
 #   plan         spec approved, no plan.md
-#   plan-review  plan.md exists, plan review not complete
+#   plan-review  plan.md exists, plan review not complete — or waiting for
+#                the human's answers to spec questions it raised
 #   tasks        plan reviewed, no tasks.md
 #   analyze      tasks.md exists, no Analyze: line in the ledger
-#   execute      unchecked tasks remain
-#   finish       every task checked, branch not finished
+#   execute      units not all complete (or no units yet and tasks open)
+#   finish       every unit complete, branch not finished
 #   done         the ledger has a Finish: PR / merged / kept line
 #
 # Usage: pipeline-phase FEATURE_DIR
@@ -35,12 +36,30 @@ has() { [ -f "$ledger" ] && grep -Eq "$1" "$ledger"; }
 
 has '^Gate 1: approved' || say spec-review "spec.md exists, no 'Gate 1: approved' in the ledger"
 [ -f "$feature/plan.md" ] || say plan "spec approved, no $feature/plan.md"
+# Spec questions from the plan review hold the build until the human answers:
+# the last "Plan: waiting" line must be followed by a "Plan: … applied" line.
+if [ -f "$ledger" ]; then
+  last_plan=$(grep -E '^Plan: (waiting|[0-9]+ answer)' "$ledger" | tail -1 || true)
+  case "$last_plan" in
+    "Plan: waiting"*) say plan-review "waiting for the human's answers — ${last_plan}" ;;
+  esac
+fi
 has '^Plan review: complete' || say plan-review "plan.md exists, no 'Plan review: complete' in the ledger"
 [ -f "$feature/tasks.md" ] || say tasks "plan reviewed, no $feature/tasks.md"
 has '^Analyze:' || say analyze "tasks.md exists, no 'Analyze:' line in the ledger"
 
-open=$(grep -cE '^[[:space:]]*- \[ \]' "$feature/tasks.md" || true)
-[ "$open" -eq 0 ] || say execute "$open task(s) unchecked in tasks.md"
+# Execution is over when every unit is closed, not when every box is ticked:
+# a task the implementer could not perform stays unchecked, with a "not done"
+# line in the ledger, and goes to the human from the finish step.
+units="$dir/units.md"
+if [ -f "$units" ]; then
+  total=$(grep -cE '^### Unit [0-9]+:' "$units" || true)
+  closed=$(grep -cE '^Unit [0-9]+: complete' "$ledger" || true)
+  [ "$total" -gt 0 ] && [ "$closed" -ge "$total" ] || say execute "${closed} of ${total} unit(s) complete"
+else
+  open=$(grep -cE '^[[:space:]]*- \[ \]' "$feature/tasks.md" || true)
+  [ "$open" -eq 0 ] || say execute "$open task(s) unchecked in tasks.md, no units yet"
+fi
 
-has '^Finish: (PR|merged|kept)' || say finish "every task checked, no final 'Finish:' line in the ledger"
+has '^Finish: (PR|merged|kept)' || say finish "every unit complete, no final 'Finish:' line in the ledger"
 say done "$(grep -E '^Finish: (PR|merged|kept)' "$ledger" | tail -1)"

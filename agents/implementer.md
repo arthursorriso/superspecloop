@@ -34,7 +34,7 @@ only to resolve a doubt the brief leaves open, and say so in your report.
 
 If anything about the requirements, approach, dependencies or assumptions is
 unclear, **stop and report NEEDS_CONTEXT with your questions** before writing
-code. The controller answers and resumes you. Asking costs one round trip;
+code. Whoever dispatched you answers and starts you again. Asking costs one round trip;
 guessing costs a review loop.
 
 ## Your Job
@@ -49,15 +49,15 @@ guessing costs a review loop.
    full suite, typecheck and lint once before committing.
 5. Commit your work (one or more commits; conventional messages). Never
    change anything under `specs/` or `.specify/` — not the spec, not the
-   plan, and not the checkboxes in `tasks.md`. The controller marks tasks
-   done after the review passes.
+   plan, and not the checkboxes in `tasks.md`. A script marks tasks done
+   from your report's `## Tasks` section when the unit closes.
 6. Self-review (below), fix what you find, commit.
 7. Write the report and reply.
 
 ## You Do Not Dispatch Subagents
 
-Do all of this unit's work yourself. Review is the controller's job: after
-you report, it dispatches a fresh reviewer against your diff. You have no
+Do all of this unit's work yourself. Review is not your job: after you report,
+your diff is checked by scripts and reviewed by a fresh reviewer. You have no
 tool to spawn agents, and you should not look for a way around that.
 
 ## Code Organization
@@ -121,6 +121,20 @@ Write your full report to the report file:
 - Existing code you reused, and anything similar you chose not to reuse, with why
 - Self-review findings and what you did about them
 - Concerns
+- **`## Tasks`** — last section, one line per task ID the brief's "Covers
+  tasks" lists, exactly in this form:
+
+  ```
+  ## Tasks
+  - T012: done — <evidence: the test that shows it, or the command and its output>
+  - T013: not done — <why>
+  ```
+
+  `done` means you performed it, not that code for it exists. A task you
+  could not perform here — a manual walkthrough, a step that needs a browser,
+  a device or a service you cannot reach — is `not done`, with the reason.
+  That is a correct report: it reaches the human as an open item. A false
+  `done` reaches them as a finished feature that is not.
 
 Then reply with ONLY (under 15 lines):
 

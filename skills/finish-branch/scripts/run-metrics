@@ -55,11 +55,15 @@ start=$(sed -n 's/^Start: \([0-9a-f]\{7,\}\).*/\1/p' "$ledger" | head -1)
   echo "| Plan reviews | $(count_files '^plan-review-[0-9]+\.md$') |"
   echo "| Plan edits | $(count_files '^plan-edit-[0-9]+\.md$') |"
   echo "| Units | $(count_lines '^Unit [0-9]+: complete') |"
+  echo "| Mode | $(sed -n 's/^Mode: \([a-z]*\).*/\1/p' "$ledger" | tail -1) |"
   echo "| Unit reviews (first pass) | $(count_files '^unit-[0-9]+-review\.md$') |"
   echo "| Unit re-reviews (fix rounds) | $(count_files '^unit-[0-9]+-review-round-[0-9]+\.md$') |"
   echo "| Units that needed a fix round | $(grep -oE '^Unit [0-9]+: fix round' "$ledger" | sort -u | wc -l | tr -d ' ') |"
   echo "| Deferred minors | $(count_lines ': minor \(deferred\)') |"
   echo "| Parked findings | $(count_lines ': parked ') |"
+  echo "| Tasks left not done | $(count_lines ': task T[0-9]+ not done ') |"
+  echo "| Spec questions from the plan review | $(count_files '^spec-questions-[0-9]+\.md$') file(s) |"
+  echo "| Spec items not met at the end | $(count_lines '^Final: spec not met') |"
   echo "| Flakes logged | $(count_lines ': flake ') |"
   echo "| Rulings | $(grep -c '^- ' "$dir/rulings.md" || true) |"
   echo "| Whole-branch reviews | $(count_files '^final-review(-round-[0-9]+)?\.md$') |"
@@ -89,8 +93,14 @@ start=$(sed -n 's/^Start: \([0-9a-f]\{7,\}\).*/\1/p' "$ledger" | head -1)
             if (@g) { my @p; while (@g) { my ($k, $v) = splice(@g, 0, 2); push @p, "$k $v" } $o = "Baseline: " . join(", ", @p) } }
     elsif (/^Unit (\d+): fix round (\d+)\/5 \((\d+) addressed, (\d+) open\b/)
           { $o = "Unit $1 fix round $2: $3 addressed, $4 open" }
+    elsif (/^Unit (\d+): complete \(.*?(review clean|review findings parked|no unit review \(lean\)), (\d+) parked, (\d+) not done\)$/)
+          { $o = "Unit $1 complete: $2, $3 parked, $4 not done" }
     elsif (/^Unit (\d+): complete \(.*?(review clean|(\d+) parked)\)$/)
           { $o = "Unit $1 complete: " . ($3 ne "" ? "$3 parked" : "review clean") }
+    elsif (/^Mode: (lean|full)\b/)                            { $o = "Mode: $1" }
+    elsif (/^Plan: waiting — (\d+) spec question\(s\)/)       { $o = "Plan: waiting, $1 spec question(s)" }
+    elsif (/^Plan: (\d+) answer\(s\) applied/)               { $o = "Plan: $1 answer(s) applied to the spec" }
+    elsif (/^Final: spec not met\b/)                          { $o = "Final: a spec item not met" }
     elsif (/^Final review: (Yes|With fixes|No) \((\d+) critical, (\d+) important, (\d+) to fix before merge, (\d+) can wait\)$/)
           { $o = "Final review: $1 ($2 critical, $3 important, $4 to fix before merge, $5 can wait)" }
     elsif (/^Final fix: \((\d+) addressed, (\d+) open\b/)       { $o = "Final fix: $1 addressed, $2 open" }

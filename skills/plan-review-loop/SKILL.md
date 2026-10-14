@@ -32,9 +32,13 @@ with no ledger line reaches nobody, the editor included.
 
 **Three things stop you:**
 
-1. **The spec has to change.** A spec gap or a spec error is never yours to
-   fix, and never the plan's to paper over. The human approved that
-   document at Gate 1; only they change it.
+1. **The spec has to change, or the plan would depart from it.** A spec gap
+   or a spec error is never yours to fix, and never the plan's to paper
+   over — and no ruling of yours may make the plan do something other than
+   what the spec says. The human approved that document at Gate 1; only they
+   change it. In one run a controller ruled two departures from the spec
+   "acceptable" here; the whole-branch review flagged them again, was ruled
+   down again, and the pull-request reviewer found them a third time.
 2. **A decision that is expensive to reverse and could reasonably go either
    way** — a new external service, a storage engine, a data migration, a
    public API shape, a security model.
@@ -108,13 +112,48 @@ later review round calls for.
   above, stop and ask the human. Otherwise rule: usually the reviewer's
   recommended option, unless the spec, the constitution or existing practice
   points elsewhere. Ledger the ruling.
-- **`## Spec Gaps`** — stop condition 1, with one exception: if the plan can
-  be made correct without the spec saying anything different (the gap is
-  the plan assuming more than the spec states), rule that the plan drops the
-  assumption. If the spec itself must change, stop and tell the human what
-  is missing, where, and what the plan needs to know.
+- **`## Spec Gaps`** — never yours, no exceptions. Run
+  `bash scripts/spec-questions FEATURE`. If it reports any, append
+  `Plan: waiting — <N> spec question(s)` to the ledger and stop (see
+  "Spec Questions" below). The pipeline's phase script holds the build at
+  this phase until the answers are applied, so there is nothing to rule
+  around.
+- **A `## Questions` option that departs from the spec** is not yours to
+  pick either: treat that question as a spec gap.
 - **A Blocking finding that contradicts the spec** — the reviewer is wrong
   or the spec is; rule with the spec as authority, and ledger it.
+
+### Spec Questions
+
+The questions file `spec-questions-<n>.md` has one `### S<k>` section per
+question, with the spec's text, the problem, the options and the
+reviewer's recommendation.
+
+**When the `superspecloop:build` skill dispatched you**, reply with exactly
+`STOP: <N> spec question(s) — <path of the questions file>` and end. The
+conductor puts them to the human and dispatches you again with the answers
+file.
+
+**Run by hand,** put each question to the human in one or two lines with its
+options, and wait.
+
+**Applying the answers** (you were dispatched again, or the human answered):
+
+1. The answers are written, as a transcript, to
+   `WS/spec-questions-<n>-answers.md`: under each `## S<k>`, the human's
+   words and nothing else; when the answer is only a label, the option's
+   text copied from the questions file and marked as copied. If the
+   conductor wrote it, use it as it is.
+2. Dispatch `superspecloop:doc-editor` with: `WD`; the documents to edit
+   (`FEATURE/spec.md`, and the plan documents where the answer settles how
+   to build it); the authority (the answers file — for the spec, the human's
+   answers are the authority now); the items to apply (the answers); and the
+   next edit report.
+3. Commit the feature directory:
+   `docs(spec): <feature> amended by answers to the plan review`.
+4. Append `Plan: <K> answer(s) applied`, then continue the loop where it
+   was — the next plan review round re-reviews the plan against the amended
+   spec.
 
 ### 3. Edit rounds — at most 3
 
@@ -162,9 +201,10 @@ execution loop's breaker does:
    parked. Then the next step: Spec Kit's tasks command, its analyze
    command, and the `superspecloop:execution-loop` skill.
 
-If the `superspecloop:build` skill is conducting this run, shorten that
-report to one line and return to it: it runs the tasks next, and the rulings
-reach the human at the end.
+When the `superspecloop:build` skill dispatched you, your whole reply is one
+line: `COMPLETE: <the "Plan review: complete" line>` — or, for any other
+stop, `STOP: <what the human must decide, with the options>`. The rulings
+reach the human at the end, from the ledger.
 
 This skill does not stop for approval when it completes cleanly. The human
 approved the spec; the plan is how, and its decisions are on the record.
@@ -182,4 +222,6 @@ wait for them.
 | "The reviewer's Reinvention finding is a stretch; the new helper is cleaner" | Existing code wins unless you can ledger why not. "Cleaner" is how duplicates are born. |
 | "Three rounds, one finding left, it's minor anyway" | Then park it with a ruling. Dropping it silently is not an option. |
 | "I'll fix that one line of plan.md myself" | Controller edits skip review. Dispatch the editor. |
+| "The plan's departure from the spec is an improvement; I'll rule it acceptable" | Then the spec says one thing and the code another, and the human finds out in the pull request. Stop and ask. |
+| "This spec gap is tiny; the plan can just drop the assumption" | Then ask: it costs the human one word. The exception that used to allow this is how departures got ruled through. |
 | "The rulings are in the rulings file; the ledger line is duplication" | The file is built from the ledger. Written by hand, it reached the editor and nobody else: eight decisions never made it to the pull request. |

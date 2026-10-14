@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Collect the latest plan review's "## Spec Gaps" into a questions file for
+# the human. A spec gap is anything where building what the spec says looks
+# wrong or impossible, or where the plan would have to depart from it: only
+# the human changes the spec, so these never become rulings. While the
+# ledger's last "Plan:" line is "waiting", pipeline-phase holds the build at
+# plan-review.
+#
+# Prints: "spec questions: <count>" and, when there are any, the file path.
+# Writes: <workspace>/spec-questions-<n>.md (next free n), only when count > 0
+#
+# Usage: spec-questions FEATURE_DIR
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: spec-questions FEATURE_DIR" >&2
+  exit 2
+fi
+
+feature=${1%/}
+loop="$(cd "$(dirname "$0")" && pwd)/../../execution-loop/scripts"
+dir=$("${BASH:-bash}" "$loop/pipeline-workspace" "$feature")
+
+latest=""
+k=1
+while [ -f "$dir/plan-review-${k}.md" ]; do latest="$dir/plan-review-${k}.md"; k=$((k + 1)); done
+[ -n "$latest" ] || { echo "no plan review file in $dir" >&2; exit 2; }
+
+gaps=$("${BASH:-bash}" "$loop/md-section" "$latest" "## Spec Gaps" || true)
+trimmed=$(printf '%s\n' "$gaps" | sed -e '/^[[:space:]]*$/d')
+case "$trimmed" in
+  ""|"None."|"None"|"none."|"none") echo "spec questions: 0"; exit 0 ;;
+esac
+
+count=$(printf '%s\n' "$trimmed" | grep -c '^### ' || true)
+[ "$count" -gt 0 ] || count=1
+
+n=1
+while [ -f "$dir/spec-questions-${n}.md" ]; do n=$((n + 1)); done
+out="$dir/spec-questions-${n}.md"
+{
+  echo "# Spec questions from the plan review — ${feature}"
+  echo
+  echo "The plan review found places where building what the spec says looks wrong"
+  echo "or impossible, or where the plan would have to depart from it. The spec is"
+  echo "yours: nothing continues until you answer. Answer in the chat (\"S1: keep the"
+  echo "spec\", \"S2: B\") or on the Answer lines. Source: \`$(basename "$latest")\`."
+  echo
+  printf '%s\n' "$gaps" | awk '
+    /^### / { if (seen) print "- **Answer:**\n"; seen = 1 }
+    { print }
+    END { if (seen) print "- **Answer:**" }
+  '
+} > "$out"
+
+echo "spec questions: ${count}"
+echo "wrote ${out}"

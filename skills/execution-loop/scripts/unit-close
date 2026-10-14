@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Close one execution unit — the only way a unit becomes complete. It refuses
+# when the record would say something that did not happen:
+#
+#   - gates: the latest gate run for this unit must be on the current HEAD
+#     and fully green
+#   - review: in full mode the unit must have a review file, and its last
+#     verdict must be clean (or the open findings parked in the ledger at the
+#     fix-round cap); in lean mode a review, if one ran, is held to the same
+#   - tasks: the implementer's report must give, for every task the unit
+#     covers, "done — <evidence>" or "not done — <reason>"
+#
+# Then it marks in tasks.md only the tasks reported done, commits tasks.md,
+# writes one "not done" ledger line per task left open, and writes the
+# "Unit N: complete" line itself.
+#
+# Usage: unit-close FEATURE_DIR UNIT_NUMBER
+set -euo pipefail
+
+if [ $# -ne 2 ]; then
+  echo "usage: unit-close FEATURE_DIR UNIT_NUMBER" >&2
+  exit 2
+fi
+
+feature=${1%/}
+n=$2
+here="$(cd "$(dirname "$0")" && pwd)"
+dir=$("${BASH:-bash}" "$here/pipeline-workspace" "$feature")
+ledger="$dir/progress.md"
+refuse() { echo "REFUSED  unit ${n}: $*" >&2; exit 3; }
+
+# Mark in tasks.md the tasks this unit reported done, and commit. Runs last,
+# and again on a re-run, so an interrupted close still ends with the ticks.
+finish_marking() {
+  [ -s "$dir/unit-${n}.done" ] || return 0
+  todo=""
+  for id in $(cat "$dir/unit-${n}.done"); do
+    grep -Eq "^[[:space:]]*- \[ \][[:space:]]+${id}([^0-9]|$)" "$feature/tasks.md" && todo="$todo $id"
+  done
+  [ -n "$todo" ] || return 0
+  # shellcheck disable=SC2086
+  "${BASH:-bash}" "$here/mark-tasks" "$feature" $todo >/dev/null
+  git add "$feature/tasks.md"
+  git commit -q -m "chore(tasks): mark$(printf '%s' "$todo" | sed 's/ /, /g; s/^,//') done"
+}
+
+if grep -Eq "^Unit ${n}: complete" "$ledger"; then
+  finish_marking
+  grep -E "^Unit ${n}: complete" "$ledger" | tail -1
+  exit 0
+fi
+[ -s "$dir/unit-${n}.base" ] || refuse "not started (no unit-${n}.base)"
+base=$(cat "$dir/unit-${n}.base")
+head=$(git rev-parse HEAD)
+[ "$(git rev-list --count "${base}..HEAD")" -gt 0 ] || refuse "no commits since the unit started"
+# unit-check records the HEAD of its last fully passing run: commits, specs
+# untouched, gates green. Closing on any other HEAD closes unchecked work.
+[ "$(cat "$dir/unit-${n}.checked" 2>/dev/null)" = "$head" ] || refuse "HEAD $(git rev-parse --short HEAD) has not passed unit-check — run it"
+[ -z "$(git diff --name-only "${base}..HEAD" -- specs .specify)" ] || refuse "the unit changed files under specs/ or .specify/"
+
+# --- gates: the newest gates file for this unit, on this HEAD, all green
+gates=""
+for f in "$dir/unit-${n}-gates.txt" "$dir"/unit-"${n}"-round-*-gates.txt; do
+  [ -f "$f" ] || continue
+  if [ -z "$gates" ] || [ "$f" -nt "$gates" ]; then gates=$f; fi
+done
+[ -n "$gates" ] || refuse "no gate run recorded — run unit-check"
+grep -q "at $(git rev-parse --short HEAD)\$" "$gates" || refuse "the last gate run ($gates) is not on HEAD $(git rev-parse --short HEAD) — run unit-check again"
+if grep -E '^## exit ' "$gates" | grep -vqE '^## exit 0$'; then
+  refuse "gates are red in $gates"
+fi
+
+# --- review
+mode=$(sed -n 's/^Mode: \([a-z]*\).*/\1/p' "$ledger" | tail -1)
+[ -n "$mode" ] || mode=lean
+review="$dir/unit-${n}-review.md"
+# Only this attempt's parked findings count: lines after the last "started".
+parked=$(awk -v s="Unit ${n}: started" -v p="Unit ${n}: parked " '
+  index($0, s) == 1 { c = 0 } index($0, p) == 1 { c++ } END { print c + 0 }' "$ledger")
+if [ "$mode" = full ] && [ ! -f "$review" ]; then
+  refuse "mode is full and there is no review file ($review) — dispatch the task reviewer"
+fi
+review_state="no unit review (lean)"
+if [ -f "$review" ]; then
+  last=""
+  r=1
+  while [ -f "$dir/unit-${n}-review-round-${r}.md" ]; do last="$dir/unit-${n}-review-round-${r}.md"; r=$((r + 1)); done
+  verdict=${last:-$review}
+  if [ "$dir/unit-${n}.checked" -nt "$verdict" ]; then
+    refuse "the verdict in $verdict is older than the last check of this code — review the code as it is now"
+  fi
+  review_state="review clean"
+  if [ -n "$last" ]; then
+    if ! grep -q 'All findings addressed' "$last"; then
+      [ "$parked" -gt 0 ] || refuse "the last re-review ($last) leaves findings open and none are parked — run another round, or park them at the cap"
+      review_state="review findings parked"
+    fi
+  else
+    if ! grep -qE '\*\*Unit quality:\*\*[[:space:]]*Approved' "$review" || ! grep -q '✅ Spec compliant' "$review"; then
+      [ "$parked" -gt 0 ] || refuse "the review ($review) is not clean and no fix round followed — run the fix loop"
+      review_state="review findings parked"
+    fi
+  fi
+fi
+
+# --- tasks: every covered task needs a status line in the report
+# Ranges ("T001-T006", "T001–T006") are expanded to every ID in between.
+covers=$(sed -n 's/^\*\*Covers tasks:\*\*[[:space:]]*//p' "$dir/unit-${n}-brief.md" | head -1 \
+  | sed 's/–/-/g; s/—/-/g' | tr ',' ' ' | awk '{
+      for (i = 1; i <= NF; i++) {
+        if (match($i, /^T[0-9]+-T?[0-9]+$/)) {
+          split($i, p, "-"); a = p[1]; b = p[2]; sub(/^T/, "", b)
+          w = length(a) - 1; from = substr(a, 2) + 0; to = b + 0
+          for (k = from; k <= to; k++) printf "T%0" w "d ", k
+        } else if ($i ~ /^T[0-9]+$/) printf "%s ", $i
+      }
+    }')
+[ -n "$covers" ] || refuse "the brief has no 'Covers tasks' line"
+report="$dir/unit-${n}-report.md"
+[ -f "$report" ] || refuse "no report file ($report)"
+# One line per task: an implementer wraps long lines, and a reason cut at
+# the wrap reaches the ledger and the pull request half-said.
+status=$(awk '
+  /^## Tasks/ { on = 1; next } /^## / { on = 0 }
+  !on { next }
+  /^[ \t]+[^ \t]/ && cur != "" { sub(/^[ \t]+/, ""); cur = cur " " $0; next }
+  { if (cur != "") print cur; cur = $0 }
+  END { if (cur != "") print cur }
+' "$report")
+done_ids=""
+open_lines=""
+for id in $covers; do
+  line=$(printf '%s\n' "$status" | grep -E "(^|[^A-Za-z0-9])${id}:" | tail -1 || true)
+  [ -n "$line" ] || refuse "the report's '## Tasks' section has no status for ${id}"
+  # Em dash or hyphen both separate status from text; normalise to "-".
+  rest=$(printf '%s' "${line#*"${id}:"}" | sed 's/—/-/g')
+  case "$rest" in
+    *"not done"*)
+      reason=$(printf '%s' "$rest" | sed -e 's/^[^-]*-[[:space:]]*//' -e 's/|/\//g' -e 's/[[:space:]]*$//')
+      open_lines="${open_lines}${id}|${reason}
+"
+      ;;
+    *"done"*)
+      evidence=$(printf '%s' "$rest" | sed -n 's/^[^-]*-[[:space:]]*\(.*[^[:space:]]\).*/\1/p')
+      [ -n "$evidence" ] || refuse "${id} is reported done with no evidence"
+      done_ids="$done_ids $id"
+      ;;
+    *) refuse "${id}: status must be 'done — <evidence>' or 'not done — <reason>'" ;;
+  esac
+done
+
+# --- write the record: ledger first, then the ticks (finish_marking)
+code_head=$(git rev-parse --short HEAD)
+printf '%s\n' "$done_ids" > "$dir/unit-${n}.done"
+not_done=0
+if [ -n "$open_lines" ]; then
+  while IFS='|' read -r id reason; do
+    [ -n "$id" ] || continue
+    "${BASH:-bash}" "$here/ledger" "$feature" "Unit ${n}: task ${id} not done — ${reason:-no reason given}" >/dev/null
+    not_done=$((not_done + 1))
+  done <<EOF2
+$open_lines
+EOF2
+fi
+line="Unit ${n}: complete (commits $(git rev-parse --short "$base")..${code_head}, ${review_state}, ${parked} parked, ${not_done} not done)"
+"${BASH:-bash}" "$here/ledger" "$feature" "$line" >/dev/null
+finish_marking
+echo "$line"

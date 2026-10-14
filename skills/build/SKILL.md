@@ -60,65 +60,127 @@ continue. Announce each phase in one line and run it.
   `/speckit.specify` and so on). Use whichever this project has.
 - If the human asked for an isolated worktree, the `superspecloop:worktree`
   skill runs once, just before the `execute` phase.
+- **Mode.** If the human asked for per-unit reviews ("with unit reviews",
+  "full mode"), the ledger gets `Mode: full` when it is created; otherwise
+  the execution loop writes `Mode: lean`. Say which in your first line.
+- **Model.** You coordinate; the reviews that need the most capable model
+  run on it by themselves. If this session is on the most capable model,
+  say once that a mid-tier session model (`/model sonnet`) costs much less
+  for the conductor's work, and carry on.
 
 ## Phases
 
 Load a phase's skill when its phase starts, not before.
 
+**Spec Kit's commands run in subagents, not here.** Each one reads the
+feature's documents and writes new ones — the plan, the tasks, the analysis.
+Run in this session, every page of that would ride in your context to the
+end of the build, and every later step would pay for it again: in one
+measured run, two fifths of the tokens were spent with more than 150k of
+context. A dispatched command costs the same once and leaves one line here.
+Each dispatch is a `general-purpose` subagent (`sonnet`) told: the working
+directory; the feature directory; the command to run — "load the
+`speckit-plan` skill and follow it", or, on an older install, "read
+`.claude/commands/speckit.plan.md` and follow it"; the absolute path of the
+execution-loop scripts directory (`../execution-loop/scripts/` from this
+skill); "the human cannot be reached from where you run: never ask them
+anything, and never answer a question the command would put to them"; and
+the one-line reply to give.
+
 ### specify
 
-Run Spec Kit's specify command with the human's request, verbatim.
+Dispatch Spec Kit's specify command with the human's request, verbatim, and
+these instructions: "Do not run its clarification round: leave every
+`[NEEDS CLARIFICATION]` marker in the spec. Reply with one line:
+`FEATURE: <the feature directory it created>`." The spec review turns every
+marker into a Gate 1 question, so the human is asked everything once, in one
+place.
 
-Two things differ from running it by hand:
+When it replies, **freeze the request**: write the human's request, verbatim
+— from their message, not from the subagent — to `FEATURE/request.md`.
 
-- **Do not run its clarification round.** If it wants to ask the human
-  questions about `[NEEDS CLARIFICATION]` markers, do not ask them and do
-  not answer them: leave the markers in the spec. The spec review turns
-  every marker into a Gate 1 question, so the human is asked everything
-  once, in one place.
-- **Freeze the request.** As soon as the feature directory exists, write the
-  human's request, verbatim, to `FEATURE/request.md`.
-
-From here on `FEATURE` is the directory specify created.
+From here on `FEATURE` is that directory.
 
 ### spec-review
 
-Load `superspecloop:spec-review-loop` and follow it. It ends at Gate 1 and
-you stop with it. When the human approves, it commits the spec; then go on
-to the next phase instead of only naming it.
+Load `superspecloop:spec-review-loop` and follow it here: Gate 1 is a
+conversation with the human. It ends at Gate 1 and you stop with it. When
+the human approves, it commits the spec; then go on to the next phase
+instead of only naming it.
 
 ### plan
 
-Run Spec Kit's plan command.
+Dispatch Spec Kit's plan command for FEATURE. Reply:
+`PLANNED: <the documents it wrote>`, or `STOP: <what it needs decided>` if
+it cannot plan without a decision. Append
+`Plan: generated (<the documents>)` to the ledger with
+`bash ../execution-loop/scripts/ledger FEATURE "<line>"`.
 
 ### plan-review
 
-Load `superspecloop:plan-review-loop` and follow it. It normally completes
-without stopping; its rulings go to the ledger. Its closing report to the
-human is one line here — the rulings reach them at the end.
+Run it in its own context, so its reviews and rulings never enter yours:
+dispatch one `general-purpose` subagent (`opus` — it rules on technical
+trade-offs) with: "Load the `superspecloop:plan-review-loop` skill and run it
+for FEATURE in WD. The `superspecloop:build` skill dispatched you: reply
+with one line, as the skill says." Add the answers file path when you are
+dispatching it again after the human answered.
+
+If `pipeline-phase` says plan-review is **waiting for the human's answers**
+(a resumed session), do not dispatch: read the newest
+`WS/spec-questions-*.md` that has no `-answers.md` beside it, put its
+questions to the human, and continue from their answers as below.
+
+Its reply:
+
+- `COMPLETE: ...` → next phase.
+- `STOP: <N> spec question(s) — <file>` → the plan needs the spec to change,
+  or would depart from it. Read the file and put each question to the human
+  in one or two lines with its options, then wait. Write their answers as a
+  transcript to `<file without .md>-answers.md` — under each `## S<k>`, their
+  words and nothing else; for a bare label, the option's text copied from the
+  questions file, marked as copied — and dispatch the subagent again with
+  that path. It applies them to the spec and continues the review.
+- `STOP: <anything else>` → relay it and wait, like any phase stop.
 
 ### tasks
 
-Run Spec Kit's tasks command, asking it to include test tasks before the
-implementation tasks of each user story. Then commit the feature directory:
-`docs(tasks): <feature name> tasks generated`.
+Dispatch Spec Kit's tasks command for FEATURE, "with test tasks before the
+implementation tasks of each user story", and: "Then commit the feature
+directory: `docs(tasks): <feature name> tasks generated`. Reply:
+`TASKS: <count> task(s), <commit sha>`."
 
 ### analyze
 
-Run Spec Kit's analyze command. It reads spec, plan and tasks and reports
-inconsistencies; it changes nothing.
+Dispatch one subagent for the whole phase, with these instructions, and act
+on its one-line reply:
 
-- **No CRITICAL findings:** append
-  `Analyze: <C> critical, <H> high, <M> medium, <L> low` to the ledger and
-  go on. The execution loop's unit brief step reports coverage gaps again.
-- **CRITICAL findings that plan or tasks can absorb** (a requirement with no
-  task, a task that contradicts the plan): write the findings to
-  `WS/analyze-findings.md`, dispatch `superspecloop:doc-editor` (`sonnet`)
-  with the plan documents and `tasks.md` as the documents to edit, the spec
-  as authority and that file as the items to apply, then run analyze once
-  more. Commit, and append the `Analyze:` line with `, 1 remediation round`.
-- **A CRITICAL finding that needs the spec to change, or that survives the
-  remediation round:** stop and tell the human. The spec is theirs.
+> Run Spec Kit's analyze command for FEATURE. It reads spec, plan and tasks
+> and reports inconsistencies; it changes nothing. It ends by offering to
+> suggest remediation edits — that offer is for a human running it by hand.
+> Do not answer it; decide by these rules:
+>
+> - **No CRITICAL or HIGH findings:** reply
+>   `ANALYZED: <C> critical, <H> high, <M> medium, <L> low`.
+> - **CRITICAL or HIGH findings that the plan or the tasks can absorb** (a
+>   requirement with no task, a task that contradicts the plan, a term used
+>   two ways): write them, with their locations and the fix the report
+>   gives, to `WS/analyze-findings.md` (`WS` is what
+>   `bash <scripts directory>/pipeline-workspace FEATURE` prints).
+>   Dispatch `superspecloop:doc-editor` (`sonnet`) with the plan documents
+>   and `tasks.md` as the documents to edit, `FEATURE/spec.md` as the
+>   authority, that file as the items to apply, and `WS/analyze-edit-1.md`
+>   as its report. Run analyze once more. Commit the feature directory:
+>   `docs(tasks): apply analyze findings to <feature name> tasks`. Reply
+>   `ANALYZED: <counts from the second run>, 1 remediation round`.
+> - **A CRITICAL or HIGH finding that needs the spec to change, or that is
+>   still there after the remediation round:** change nothing more and reply
+>   `STOP: <the finding, its location, and what the spec would have to say>`.
+>   Never edit spec.md.
+
+On `ANALYZED: ...`, append `Analyze: <the rest of its line>` to the ledger
+and go on; MEDIUM and LOW findings stay in the analysis, and the execution
+loop's unit brief step reports coverage gaps again. On `STOP: ...`, tell the
+human and wait: the spec is theirs.
 
 ### execute
 
@@ -152,3 +214,5 @@ do not redo work a ledger line says is done.
 | "I'll summarize what the plan review decided before moving on" | It is in the ledger and reaches the human at the end. One line, next phase. |
 | "Analyze found a gap in the spec; I'll have the editor patch spec.md" | The spec changed only at Gate 1, by the human. Stop and tell them. |
 | "The phase stopped to ask something minor; I'll answer and continue" | A phase's stop is your stop. Relay the question. |
+| "Running the plan command here is simpler than dispatching it" | Then the plan, the tasks and the analysis ride in your context to the end of the build, and every later step pays for them again. Dispatch. |
+| "Analyze asked whether to suggest remediation — I'll ask the human" | That offer is for a person running it by hand. The phase's rules decide: remediate what plan and tasks can absorb, stop only for the spec. |

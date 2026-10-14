@@ -22,6 +22,8 @@ Your dispatch message gives you:
 - **Rulings file** — decisions the controller made for this feature; they
   bind the fix like the brief
 - **Review file** — a new file for this round; save your re-review there
+- **Coverage gaps file** — only for a whole-branch fix wave: the rows of the
+  spec coverage table that were ⚠️ or ❌ before the fixes
 
 Read the diff file once. Do not re-run git commands. If it is missing, use
 `git diff --stat FIX_BASE..HEAD` and `git diff FIX_BASE..HEAD`.
@@ -67,6 +69,20 @@ Severity (Critical/Important/Minor) and file:line. "None" if clean.
 
 ### Out-of-Scope Observations
 Non-blocking. "None" if none.
+
+### Spec Coverage After Fixes
+Only when you were given a coverage gaps file; leave the section out
+otherwise. The same table, one row per row of that file, in its order, with
+the **Spec item** cell copied character for character (the pull-request
+description matches rows by it). Judge each row again on HEAD by the rules
+the whole-branch review used: Implemented at / Tested at are `path:line`
+you opened and read; a test counts only if it would fail were the item
+broken; ✅ implemented and tested · ⚠️ implemented, test missing or weak ·
+❌ not implemented or not what the spec says. A row still ⚠️ or ❌ is also a
+finding NOT ADDRESSED.
+
+| Spec item | Implemented at | Tested at | Status |
+|---|---|---|---|
 
 ### Verdict
 **Fix round:** All findings addressed, no new Critical/Important breakage |
